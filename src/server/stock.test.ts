@@ -19,43 +19,38 @@ function fmtAbbrev(n: number) {
   return String(n)
 }
 
-// Mirrors the mapping logic in the handler
-function parseStockMeta(meta: Record<string, unknown>) {
+// Mirrors the Finnhub quote mapping logic in the handler
+function mapQuote(q: Record<string, number>, profile: Record<string, unknown> = {}) {
+  const price = q.c
+  const prevClose = q.pc
+  const change = price - prevClose
+  const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
   return {
-    symbol: meta.symbol,
-    shortName: meta.shortName ?? meta.symbol,
-    regularMarketPrice: meta.regularMarketPrice ?? 0,
-    regularMarketChange: meta.regularMarketChange ?? 0,
-    regularMarketChangePercent: meta.regularMarketChangePercent ?? 0,
-    regularMarketVolume: meta.regularMarketVolume ?? 0,
-    regularMarketOpen: meta.regularMarketOpen ?? 0,
-    regularMarketDayHigh: meta.regularMarketDayHigh ?? 0,
-    regularMarketDayLow: meta.regularMarketDayLow ?? 0,
-    fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? 0,
-    fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? 0,
-    marketCap: meta.marketCap ?? 0,
-    currency: meta.currency ?? 'USD',
-    exchangeName: meta.exchangeName ?? '',
-    previousClose: meta.previousClose ?? meta.chartPreviousClose ?? 0,
+    regularMarketPrice: price,
+    regularMarketChange: change,
+    regularMarketChangePercent: changePct,
+    regularMarketOpen: q.o ?? 0,
+    regularMarketDayHigh: q.h ?? 0,
+    regularMarketDayLow: q.l ?? 0,
+    previousClose: prevClose,
+    shortName: (profile.name as string) ?? 'UNKNOWN',
+    marketCap: profile.marketCapitalization
+      ? (profile.marketCapitalization as number) * 1_000_000
+      : 0,
   }
 }
 
-function parseCandleResult(result: {
-  timestamp?: number[]
-  indicators?: { quote?: Array<Record<string, (number | null)[]>> }
-}) {
-  const ts = result.timestamp ?? []
-  const q = result.indicators?.quote?.[0] ?? {}
-  return ts
-    .map((t, i) => ({
-      time: t,
-      open: (q['open']?.[i] as number) ?? 0,
-      high: (q['high']?.[i] as number) ?? 0,
-      low: (q['low']?.[i] as number) ?? 0,
-      close: (q['close']?.[i] as number) ?? 0,
-      volume: (q['volume']?.[i] as number) ?? 0,
-    }))
-    .filter((c) => c.close > 0)
+function mapCandles(json: Record<string, unknown>) {
+  if (json.s !== 'ok' || !json.t) return []
+  const ts = json.t as number[]
+  return ts.map((t, i) => ({
+    time: t,
+    open: (json.o as number[])[i] ?? 0,
+    high: (json.h as number[])[i] ?? 0,
+    low: (json.l as number[])[i] ?? 0,
+    close: (json.c as number[])[i] ?? 0,
+    volume: (json.v as number[])[i] ?? 0,
+  })).filter(c => c.close > 0)
 }
 
 // ─── Symbol validator ──────────────────────────────────────────────────────────
@@ -72,95 +67,47 @@ describe('symbol regex', () => {
   )
 })
 
-// ─── parseStockMeta ────────────────────────────────────────────────────────────
+// ─── Finnhub quote mapping ─────────────────────────────────────────────────────
 
-describe('parseStockMeta', () => {
-  it('maps a full YF meta object', () => {
-    const meta = {
-      symbol: 'AAPL',
-      shortName: 'Apple Inc.',
-      regularMarketPrice: 213.45,
-      regularMarketChange: 2.1,
-      regularMarketChangePercent: 0.99,
-      regularMarketVolume: 52_000_000,
-      regularMarketOpen: 211.0,
-      regularMarketDayHigh: 214.5,
-      regularMarketDayLow: 210.2,
-      fiftyTwoWeekHigh: 230.0,
-      fiftyTwoWeekLow: 160.0,
-      marketCap: 3_200_000_000_000,
-      currency: 'USD',
-      exchangeName: 'NMS',
-      previousClose: 211.35,
-    }
-    const result = parseStockMeta(meta)
-    expect(result.symbol).toBe('AAPL')
+describe('Finnhub quote mapping', () => {
+  it('maps a standard Finnhub quote', () => {
+    const result = mapQuote({ c: 213.45, pc: 210.0, o: 211.0, h: 215.0, l: 209.5 })
     expect(result.regularMarketPrice).toBe(213.45)
-    expect(result.currency).toBe('USD')
-    expect(result.previousClose).toBe(211.35)
+    expect(result.regularMarketChange).toBeCloseTo(3.45)
+    expect(result.regularMarketChangePercent).toBeCloseTo(1.643)
+    expect(result.regularMarketDayHigh).toBe(215.0)
+    expect(result.previousClose).toBe(210.0)
   })
 
-  it('falls back to chartPreviousClose when previousClose is missing', () => {
-    const meta = { symbol: 'XYZ', chartPreviousClose: 99.9 }
-    expect(parseStockMeta(meta).previousClose).toBe(99.9)
+  it('computes changePct as 0 when prevClose is 0', () => {
+    const result = mapQuote({ c: 100, pc: 0, o: 0, h: 0, l: 0 })
+    expect(result.regularMarketChangePercent).toBe(0)
   })
 
-  it('fills zeros for missing numeric fields', () => {
-    const result = parseStockMeta({ symbol: 'XYZ' })
-    expect(result.regularMarketPrice).toBe(0)
-    expect(result.marketCap).toBe(0)
-    expect(result.fiftyTwoWeekHigh).toBe(0)
-  })
-
-  it('uses symbol as shortName fallback', () => {
-    expect(parseStockMeta({ symbol: 'XYZ' }).shortName).toBe('XYZ')
-  })
-
-  it('defaults currency to USD', () => {
-    expect(parseStockMeta({ symbol: 'XYZ' }).currency).toBe('USD')
+  it('multiplies marketCap by 1M', () => {
+    const result = mapQuote({ c: 100, pc: 99, o: 99, h: 101, l: 99 }, { marketCapitalization: 3200000, name: 'Apple Inc.' })
+    expect(result.marketCap).toBe(3_200_000_000_000)
+    expect(result.shortName).toBe('Apple Inc.')
   })
 })
 
-// ─── parseCandleResult ────────────────────────────────────────────────────────
+// ─── Finnhub candle mapping ────────────────────────────────────────────────────
 
-describe('parseCandleResult', () => {
-  it('maps timestamps and OHLCV arrays', () => {
-    const result = {
-      timestamp: [1700000000, 1700000300],
-      indicators: {
-        quote: [{ open: [100, 101], high: [105, 106], low: [99, 100], close: [104, 105], volume: [1000, 1100] }],
-      },
-    }
-    const candles = parseCandleResult(result)
+describe('Finnhub candle mapping', () => {
+  it('maps a valid Finnhub candle response', () => {
+    const json = { s: 'ok', t: [1700000000, 1700003600], o: [100, 102], h: [105, 107], l: [99, 101], c: [104, 106], v: [1000, 1100] }
+    const candles = mapCandles(json)
     expect(candles).toHaveLength(2)
     expect(candles[0]).toEqual({ time: 1700000000, open: 100, high: 105, low: 99, close: 104, volume: 1000 })
   })
 
-  it('filters out candles with zero close', () => {
-    const result = {
-      timestamp: [1, 2, 3],
-      indicators: {
-        quote: [{ open: [1, 0, 3], high: [1, 0, 3], low: [1, 0, 3], close: [1, 0, 3], volume: [10, 0, 30] }],
-      },
-    }
-    const candles = parseCandleResult(result)
-    expect(candles).toHaveLength(2)
-    expect(candles.every((c) => c.close > 0)).toBe(true)
+  it('returns [] when status is not ok', () => {
+    expect(mapCandles({ s: 'no_data', t: null })).toEqual([])
   })
 
-  it('returns empty array for missing timestamp', () => {
-    expect(parseCandleResult({})).toEqual([])
-  })
-
-  it('defaults null OHLCV values to 0', () => {
-    const result = {
-      timestamp: [1700000000],
-      indicators: {
-        quote: [{ open: [null], high: [null], low: [null], close: [null], volume: [null] }],
-      },
-    }
-    // close=0 → filtered out
-    expect(parseCandleResult(result as any)).toHaveLength(0)
+  it('filters candles with zero close', () => {
+    const json = { s: 'ok', t: [1, 2], o: [1, 0], h: [1, 0], l: [1, 0], c: [1, 0], v: [10, 0] }
+    expect(mapCandles(json)).toHaveLength(1)
   })
 })
 

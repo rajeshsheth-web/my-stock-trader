@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useState, lazy, Suspense } from 'react'
-import { getStockOverview } from '@/server/stock'
+import { useState, useEffect, lazy, Suspense } from 'react'
+import { getStockOverview, getStockQuote } from '@/server/stock'
 import { useAuth } from './__root'
 
 const YFChart = lazy(() => import('@/components/YFChart').then(m => ({ default: m.YFChart })))
@@ -75,8 +75,25 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  const change = stock.regularMarketChange
-  const pct = stock.regularMarketChangePercent
+  const [livePrice, setLivePrice] = useState(stock.regularMarketPrice)
+  const [liveChange, setLiveChange] = useState(stock.regularMarketChange)
+  const [livePct, setLivePct] = useState(stock.regularMarketChangePercent)
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const q = await getStockQuote({ data: stock.symbol })
+        if (!q) return
+        setLivePrice(q.price)
+        setLiveChange(q.change)
+        setLivePct(q.changePct)
+      } catch {}
+    }, 10_000)
+    return () => clearInterval(id)
+  }, [stock.symbol])
+
+  const change = liveChange
+  const pct = livePct
   const isUp = change >= 0
   const priceClass = isUp ? 'price-up' : 'price-down'
   const sign = isUp ? '+' : ''
@@ -136,7 +153,7 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
           </div>
           <div className="mt-1 flex items-baseline gap-3 flex-wrap">
             <span className={`text-3xl font-bold tabular-nums ${priceClass}`}>
-              {fmtPrice(stock.regularMarketPrice)}
+              {fmtPrice(livePrice)}
             </span>
             <span className={`text-base tabular-nums ${priceClass}`}>
               {sign}{fmtPrice(change)} ({sign}{pct.toFixed(2)}%)

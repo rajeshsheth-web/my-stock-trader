@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-import {
+import { useEffect, useRef, useState } from 'react'import {
   createChart,
   AreaSeries,
   CandlestickSeries,
@@ -9,7 +8,7 @@ import {
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts'
-import { getRangeCandles } from '@/server/stock'
+import { getRangeCandles, getStockQuote } from '@/server/stock'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -66,6 +65,7 @@ export function YFChart({ symbol }: YFChartProps) {
   const [candles, setCandles] = useState<Candle[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [isExtendedHours, setIsExtendedHours] = useState(false)
 
   const priceRef = useRef<HTMLDivElement>(null)
   const volumeRef = useRef<HTMLDivElement>(null)
@@ -243,6 +243,30 @@ export function YFChart({ symbol }: YFChartProps) {
     volChart.timeScale().fitContent()
   }, [candles, mode, loading, error])
 
+  // Poll every 10 seconds for live price update
+  useEffect(() => {
+    if (!priceSeriesRef.current || candles.length === 0) return
+    const id = setInterval(async () => {
+      try {
+        const q = await getStockQuote({ data: symbol })
+        if (!q || !priceSeriesRef.current) return
+        const point = { time: q.timestamp as any, value: q.price }
+        try { priceSeriesRef.current.update(point) } catch {}
+
+        const now = new Date()
+        const hour = now.getUTCHours() - 5 // EST offset (rough)
+        const mins = now.getUTCMinutes()
+        const totalMins = hour * 60 + mins
+        // Pre-market: 4:00–9:30 AM ET = 240–570 mins
+        // Regular: 9:30–16:00 ET = 570–960 mins
+        // After-hours: 16:00–20:00 ET = 960–1200 mins
+        const isRegular = totalMins >= 570 && totalMins < 960
+        setIsExtendedHours(!isRegular && totalMins >= 240 && totalMins < 1200)
+      } catch {}
+    }, 10_000)
+    return () => clearInterval(id)
+  }, [symbol, candles.length])
+
   return (
     <div className="card p-0 overflow-hidden">
       {/* Controls */}
@@ -251,7 +275,7 @@ export function YFChart({ symbol }: YFChartProps) {
         style={{ borderColor: COLORS.border }}
       >
         {/* Range tabs */}
-        <div className="flex gap-0.5">
+        <div className="flex gap-0.5 items-center">
           {RANGES.map(({ key }) => (
             <button
               key={key}
@@ -266,6 +290,11 @@ export function YFChart({ symbol }: YFChartProps) {
               {key}
             </button>
           ))}
+          {isExtendedHours && rangeKey === '1D' && (
+            <span style={{ color: '#d97706', fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: 'rgba(217,119,6,0.1)', border: '1px solid rgba(217,119,6,0.3)' }}>
+              Extended Hours
+            </span>
+          )}
         </div>
 
         {/* Mode toggle */}
