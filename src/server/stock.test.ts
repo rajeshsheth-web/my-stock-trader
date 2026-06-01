@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 
-// ─── Helpers (duplicated from server/stock.ts to keep tests fast/isolated) ───
+// ─── Helpers (mirrored from server logic) ─────────────────────────────────────
 
 const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
 
@@ -19,38 +19,42 @@ function fmtAbbrev(n: number) {
   return String(n)
 }
 
-// Mirrors the Finnhub quote mapping logic in the handler
-function mapQuote(q: Record<string, number>, profile: Record<string, unknown> = {}) {
-  const price = q.c
-  const prevClose = q.pc
-  const change = price - prevClose
-  const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
+// Mirrors the YF quote mapping logic
+function mapQuote(q: {
+  regularMarketPrice: number
+  regularMarketChange: number
+  regularMarketChangePercent: number
+  regularMarketPreviousClose: number
+  regularMarketOpen?: number
+  regularMarketDayHigh?: number
+  regularMarketDayLow?: number
+  shortName?: string
+  marketCap?: number
+}) {
   return {
-    regularMarketPrice: price,
-    regularMarketChange: change,
-    regularMarketChangePercent: changePct,
-    regularMarketOpen: q.o ?? 0,
-    regularMarketDayHigh: q.h ?? 0,
-    regularMarketDayLow: q.l ?? 0,
-    previousClose: prevClose,
-    shortName: (profile.name as string) ?? 'UNKNOWN',
-    marketCap: profile.marketCapitalization
-      ? (profile.marketCapitalization as number) * 1_000_000
-      : 0,
+    regularMarketPrice: q.regularMarketPrice,
+    regularMarketChange: q.regularMarketChange,
+    regularMarketChangePercent: q.regularMarketChangePercent,
+    regularMarketOpen: q.regularMarketOpen ?? 0,
+    regularMarketDayHigh: q.regularMarketDayHigh ?? 0,
+    regularMarketDayLow: q.regularMarketDayLow ?? 0,
+    previousClose: q.regularMarketPreviousClose,
+    shortName: q.shortName ?? 'UNKNOWN',
+    marketCap: q.marketCap ?? 0,
   }
 }
 
-function mapCandles(json: Record<string, unknown>) {
-  if (json.s !== 'ok' || !json.t) return []
-  const ts = json.t as number[]
-  return ts.map((t, i) => ({
-    time: t,
-    open: (json.o as number[])[i] ?? 0,
-    high: (json.h as number[])[i] ?? 0,
-    low: (json.l as number[])[i] ?? 0,
-    close: (json.c as number[])[i] ?? 0,
-    volume: (json.v as number[])[i] ?? 0,
-  })).filter(c => c.close > 0)
+function mapCandles(quotes: { date: Date; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null }[]) {
+  return quotes
+    .filter(c => c.close != null && c.close > 0)
+    .map(c => ({
+      time: Math.floor(c.date.getTime() / 1000),
+      open: c.open ?? 0,
+      high: c.high ?? 0,
+      low: c.low ?? 0,
+      close: c.close ?? 0,
+      volume: c.volume ?? 0,
+    }))
 }
 
 // ─── Symbol validator ──────────────────────────────────────────────────────────
@@ -67,11 +71,11 @@ describe('symbol regex', () => {
   )
 })
 
-// ─── Finnhub quote mapping ─────────────────────────────────────────────────────
+// ─── YF quote mapping ──────────────────────────────────────────────────────────
 
-describe('Finnhub quote mapping', () => {
-  it('maps a standard Finnhub quote', () => {
-    const result = mapQuote({ c: 213.45, pc: 210.0, o: 211.0, h: 215.0, l: 209.5 })
+describe('YF quote mapping', () => {
+  it('maps a standard quote', () => {
+    const result = mapQuote({ regularMarketPrice: 213.45, regularMarketChange: 3.45, regularMarketChangePercent: 1.643, regularMarketPreviousClose: 210.0, regularMarketOpen: 211.0, regularMarketDayHigh: 215.0, regularMarketDayLow: 209.5 })
     expect(result.regularMarketPrice).toBe(213.45)
     expect(result.regularMarketChange).toBeCloseTo(3.45)
     expect(result.regularMarketChangePercent).toBeCloseTo(1.643)
@@ -79,35 +83,45 @@ describe('Finnhub quote mapping', () => {
     expect(result.previousClose).toBe(210.0)
   })
 
-  it('computes changePct as 0 when prevClose is 0', () => {
-    const result = mapQuote({ c: 100, pc: 0, o: 0, h: 0, l: 0 })
-    expect(result.regularMarketChangePercent).toBe(0)
+  it('defaults missing fields to 0', () => {
+    const result = mapQuote({ regularMarketPrice: 100, regularMarketChange: 1, regularMarketChangePercent: 1, regularMarketPreviousClose: 99 })
+    expect(result.regularMarketOpen).toBe(0)
+    expect(result.marketCap).toBe(0)
+    expect(result.shortName).toBe('UNKNOWN')
   })
 
-  it('multiplies marketCap by 1M', () => {
-    const result = mapQuote({ c: 100, pc: 99, o: 99, h: 101, l: 99 }, { marketCapitalization: 3200000, name: 'Apple Inc.' })
+  it('passes through marketCap and shortName', () => {
+    const result = mapQuote({ regularMarketPrice: 100, regularMarketChange: 1, regularMarketChangePercent: 1, regularMarketPreviousClose: 99, marketCap: 3_200_000_000_000, shortName: 'Apple Inc.' })
     expect(result.marketCap).toBe(3_200_000_000_000)
     expect(result.shortName).toBe('Apple Inc.')
   })
 })
 
-// ─── Finnhub candle mapping ────────────────────────────────────────────────────
+// ─── YF candle mapping ─────────────────────────────────────────────────────────
 
-describe('Finnhub candle mapping', () => {
-  it('maps a valid Finnhub candle response', () => {
-    const json = { s: 'ok', t: [1700000000, 1700003600], o: [100, 102], h: [105, 107], l: [99, 101], c: [104, 106], v: [1000, 1100] }
-    const candles = mapCandles(json)
+describe('YF candle mapping', () => {
+  it('maps valid candles', () => {
+    const d1 = new Date('2024-01-01T14:30:00Z')
+    const d2 = new Date('2024-01-01T15:30:00Z')
+    const candles = mapCandles([
+      { date: d1, open: 100, high: 105, low: 99, close: 104, volume: 1000 },
+      { date: d2, open: 102, high: 107, low: 101, close: 106, volume: 1100 },
+    ])
     expect(candles).toHaveLength(2)
-    expect(candles[0]).toEqual({ time: 1700000000, open: 100, high: 105, low: 99, close: 104, volume: 1000 })
+    expect(candles[0]).toEqual({ time: Math.floor(d1.getTime() / 1000), open: 100, high: 105, low: 99, close: 104, volume: 1000 })
   })
 
-  it('returns [] when status is not ok', () => {
-    expect(mapCandles({ s: 'no_data', t: null })).toEqual([])
+  it('filters candles with null or zero close', () => {
+    const candles = mapCandles([
+      { date: new Date(), open: 1, high: 1, low: 1, close: 1, volume: 10 },
+      { date: new Date(), open: 0, high: 0, low: 0, close: null, volume: 0 },
+      { date: new Date(), open: 0, high: 0, low: 0, close: 0, volume: 0 },
+    ])
+    expect(candles).toHaveLength(1)
   })
 
-  it('filters candles with zero close', () => {
-    const json = { s: 'ok', t: [1, 2], o: [1, 0], h: [1, 0], l: [1, 0], c: [1, 0], v: [10, 0] }
-    expect(mapCandles(json)).toHaveLength(1)
+  it('returns empty array for empty input', () => {
+    expect(mapCandles([])).toEqual([])
   })
 })
 
@@ -156,7 +170,7 @@ describe('movers category validator', () => {
   })
 })
 
-// ─── Yahoo Finance fetch error handling ──────────────────────────────────────
+// ─── YF response error handling ───────────────────────────────────────────────
 
 describe('YF response error handling', () => {
   it('returns null when chart result is missing', () => {
