@@ -25,7 +25,6 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
 }
 
 // Extract extended hours price from the v8 chart result's candle data.
-// When includePrePost=true the last candle after regular close is the AH/PM price.
 function extractExtendedHours(result: any, regularPrice: number) {
   try {
     const ms: string = result.meta?.marketState ?? 'REGULAR'
@@ -35,21 +34,33 @@ function extractExtendedHours(result: any, regularPrice: number) {
     const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
     if (!ts.length) return null
 
-    // Regular market close time from meta
-    const regularCloseTime: number = result.meta?.regularMarketTime ?? 0
-
-    // For PRE: find candles before regular open; for POST/CLOSED: after regular close
     const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
-    const extCandles = ts
-      .map((t, i) => ({ t, c: closes[i] }))
-      .filter(({ t, c }) => c != null && c > 0 && (isPreMarket ? t < regularCloseTime : t > regularCloseTime))
 
-    if (!extCandles.length) return null
+    // Use currentTradingPeriod for accurate session boundary
+    const regularEnd: number = result.meta?.currentTradingPeriod?.regular?.end ?? 0
+    const regularStart: number = result.meta?.currentTradingPeriod?.regular?.start ?? 0
+    const boundary = isPreMarket ? regularStart : regularEnd
 
-    const extPrice = extCandles[extCandles.length - 1].c
-    const base = regularPrice
-    const extChange = extPrice - base
-    const extChangePct = base > 0 ? (extChange / base) * 100 : 0
+    let extPrice: number | null = null
+
+    if (boundary > 0) {
+      const extCandles = ts
+        .map((t, i) => ({ t, c: closes[i] }))
+        .filter(({ t, c }) => c != null && c > 0 && (isPreMarket ? t < boundary : t > boundary))
+      if (extCandles.length) extPrice = extCandles[extCandles.length - 1].c
+    }
+
+    // Fallback: just use the very last non-null candle
+    if (extPrice == null) {
+      for (let i = closes.length - 1; i >= 0; i--) {
+        if (closes[i] != null && closes[i] > 0) { extPrice = closes[i]; break }
+      }
+    }
+
+    if (extPrice == null || extPrice === regularPrice) return null
+
+    const extChange = extPrice - regularPrice
+    const extChangePct = regularPrice > 0 ? (extChange / regularPrice) * 100 : 0
 
     return {
       marketState: ms,

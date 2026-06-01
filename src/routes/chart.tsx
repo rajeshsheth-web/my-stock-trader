@@ -202,6 +202,9 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
               Vol: {fmtAbbrev(stock.regularMarketVolume)}
             </span>
           </div>
+          <p className="text-xs mt-1" style={{color:'var(--color-muted)'}}>
+            dbg: state={marketState} pre={String(stock.preMarketPrice)} post={String(stock.postMarketPrice)} ext={extData ? extData.price.toFixed(2) : 'null'}
+          </p>
           {extData != null && (
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <span
