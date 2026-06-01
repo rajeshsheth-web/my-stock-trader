@@ -24,63 +24,46 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
   return json?.chart?.result?.[0] ?? null
 }
 
-// Extract extended hours price from the v8 chart result's candle data.
-function extractExtendedHours(result: any, regularPrice: number) {
-  try {
-    const ms: string = result.meta?.marketState ?? 'REGULAR'
-    if (ms === 'REGULAR') return null
+function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]) {
+  const ms: string = meta?.marketState ?? 'REGULAR'
+  if (ms === 'REGULAR') return null
 
-    const ts: number[] = result.timestamp ?? []
-    const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
-    if (!ts.length) return null
+  if (!ts.length) return null
 
-    const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
+  const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
+  const ctp = meta?.currentTradingPeriod ?? {}
+  const regularEnd: number = ctp.regular?.end ?? 0
+  const regularStart: number = ctp.regular?.start ?? 0
+  const regularMarketTime: number = meta?.regularMarketTime ?? 0
 
-    // Use the most recent regular session boundary
-    const regularEnd: number = result.meta?.currentTradingPeriod?.regular?.end ?? 0
-    const regularStart: number = result.meta?.currentTradingPeriod?.regular?.start ?? 0
-    // Fallback: use regularMarketTime (last regular close timestamp) when boundary is unavailable
-    const regularMarketTime: number = result.meta?.regularMarketTime ?? 0
+  const boundary = isPreMarket
+    ? (regularStart > 0 ? regularStart : 0)
+    : (regularEnd > 0 ? regularEnd : regularMarketTime)
 
-    const boundary = isPreMarket
-      ? (regularStart > 0 ? regularStart : 0)
-      : (regularEnd > 0 ? regularEnd : regularMarketTime)
+  if (boundary === 0) return null
 
-    let extPrice: number | null = null
-    // Find last regular-session candle close to use as comparison baseline.
-    // Yahoo Finance may update meta.regularMarketPrice to include after-hours,
-    // so we can't rely on it as the "regular close" reference.
-    let regularClose: number = regularPrice
-    if (boundary > 0 && !isPreMarket) {
-      const regCandles = ts
-        .map((t, i) => ({ t, c: closes[i] }))
-        .filter(({ t, c }) => c != null && c > 0 && t <= boundary)
-      if (regCandles.length) regularClose = regCandles[regCandles.length - 1].c
-    }
+  const pairs = ts.map((t, i) => ({ t, c: closes[i] }))
+  const regCandles = pairs.filter(({ t, c }) => c != null && (c as number) > 0 && t <= boundary)
+  const extCandles = pairs.filter(({ t, c }) => c != null && (c as number) > 0 && (isPreMarket ? t < boundary : t > boundary))
 
-    if (boundary > 0) {
-      const extCandles = ts
-        .map((t, i) => ({ t, c: closes[i] }))
-        .filter(({ t, c }) => c != null && c > 0 && (isPreMarket ? t < boundary : t > boundary))
-      if (extCandles.length) extPrice = extCandles[extCandles.length - 1].c
-    }
+  const extPrice = extCandles.length ? extCandles[extCandles.length - 1].c as number : null
+  if (extPrice == null) return null
 
-    if (extPrice == null) return null
+  // Use last regular-session candle as reference — meta.regularMarketPrice may
+  // already reflect after-hours on Yahoo Finance.
+  const regularClose = regCandles.length ? regCandles[regCandles.length - 1].c as number : null
+  if (regularClose == null) return null
 
-    const extChange = extPrice - regularClose
-    const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
+  const extChange = extPrice - regularClose
+  const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
 
-    return {
-      marketState: ms,
-      preMarketPrice: isPreMarket ? extPrice : null,
-      preMarketChange: isPreMarket ? extChange : null,
-      preMarketChangePercent: isPreMarket ? extChangePct : null,
-      postMarketPrice: !isPreMarket ? extPrice : null,
-      postMarketChange: !isPreMarket ? extChange : null,
-      postMarketChangePercent: !isPreMarket ? extChangePct : null,
-    }
-  } catch {
-    return null
+  return {
+    preMarketPrice: isPreMarket ? extPrice : null,
+    preMarketChange: isPreMarket ? extChange : null,
+    preMarketChangePercent: isPreMarket ? extChangePct : null,
+    postMarketPrice: !isPreMarket ? extPrice : null,
+    postMarketChange: !isPreMarket ? extChange : null,
+    postMarketChangePercent: !isPreMarket ? extChangePct : null,
   }
 }
 
@@ -101,43 +84,8 @@ export const getStockOverview = createServerFn({ method: 'GET' })
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
       const ts: number[] = result.timestamp ?? []
-      const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
-      const lastTs = ts[ts.length - 1] ?? 0
-      const lastClose = closes[closes.length - 1] ?? 0
-      const ctp = meta.currentTradingPeriod ?? {}
-
-      // Inline extended hours extraction (bypassing function for debug)
-      let ext: ReturnType<typeof extractExtendedHours> = null
-      let extErr = ''
-      try {
-        if (ms !== 'REGULAR') {
-          const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
-          const regularEnd: number = ctp.regular?.end ?? 0
-          const regularStart: number = ctp.regular?.start ?? 0
-          const regularMarketTime: number = meta.regularMarketTime ?? 0
-          const boundary = isPreMarket ? (regularStart > 0 ? regularStart : 0) : (regularEnd > 0 ? regularEnd : regularMarketTime)
-          const allPairs = ts.map((t: number, i: number) => ({ t, c: closes[i] as number | null }))
-          const regCandles = allPairs.filter(({t, c}) => c != null && (c as number) > 0 && t <= boundary)
-          const extCandles = allPairs.filter(({t, c}) => c != null && (c as number) > 0 && (isPreMarket ? t < boundary : t > boundary))
-          const regularClose = regCandles.length ? regCandles[regCandles.length - 1].c as number : price
-          const extPrice = extCandles.length ? extCandles[extCandles.length - 1].c as number : null
-          if (extPrice != null) {
-            const extChange = extPrice - regularClose
-            const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
-            ext = {
-              marketState: ms,
-              preMarketPrice: isPreMarket ? extPrice : null,
-              preMarketChange: isPreMarket ? extChange : null,
-              preMarketChangePercent: isPreMarket ? extChangePct : null,
-              postMarketPrice: !isPreMarket ? extPrice : null,
-              postMarketChange: !isPreMarket ? extChange : null,
-              postMarketChangePercent: !isPreMarket ? extChangePct : null,
-            }
-          }
-        }
-      } catch (e: any) {
-        extErr = String(e?.message ?? e)
-      }
+      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? []
+      const ext = extractExtendedHours(meta, ts, closes)
 
       return {
         symbol,
@@ -163,28 +111,6 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         postMarketPrice: ext?.postMarketPrice ?? null,
         postMarketChange: ext?.postMarketChange ?? null,
         postMarketChangePercent: ext?.postMarketChangePercent ?? null,
-        _dbg: (() => {
-          const boundary = (ctp.regular?.end ?? 0) > 0 ? (ctp.regular?.end ?? 0) : (meta.regularMarketTime ?? 0)
-          const allCandles = ts.map((t: number, i: number) => ({ t, c: closes[i] }))
-          const afterBoundary = allCandles.filter(({t, c}: any) => c != null && c > 0 && t > boundary)
-          const beforeBoundary = allCandles.filter(({t, c}: any) => c != null && c > 0 && t <= boundary)
-          return {
-            ms,
-            regularMarketTime: meta.regularMarketTime ?? 0,
-            ctpRegEnd: ctp.regular?.end ?? 0,
-            boundary,
-            totalCandles: ts.length,
-            afterBoundaryCount: afterBoundary.length,
-            beforeBoundaryCount: beforeBoundary.length,
-            lastRegCandle: beforeBoundary[beforeBoundary.length - 1] ?? null,
-            firstExtCandle: afterBoundary[0] ?? null,
-            lastExtCandle: afterBoundary[afterBoundary.length - 1] ?? null,
-            lastTs,
-            lastClose,
-            extRaw: ext,
-            extErr,
-          }
-        })(),
       }
     } catch {
       return null
@@ -207,7 +133,9 @@ export const getStockQuote = createServerFn({ method: 'GET' })
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
-      const ext = extractExtendedHours(result, price)
+      const ts: number[] = result.timestamp ?? []
+      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? []
+      const ext = extractExtendedHours(meta, ts, closes)
 
       return {
         price,
