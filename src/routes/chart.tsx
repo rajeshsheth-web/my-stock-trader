@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { getStockOverview, getStockQuote } from '@/server/stock'
+import { getAiVerdict, type AiVerdict } from '@/server/ai'
 import { useAuth } from './__root'
 
 const YFChart = lazy(() => import('@/components/YFChart').then(m => ({ default: m.YFChart })))
@@ -282,19 +283,90 @@ function KeyStats({ stock }: { stock: NonNullable<ReturnType<typeof Route.useLoa
   )
 }
 
-function AiVerdictSkeleton() {
+const RATING_STYLE: Record<string, { bg: string; color: string }> = {
+  'Strong Buy': { bg: 'rgba(0,135,60,0.12)',   color: '#00873c' },
+  'Buy':        { bg: 'rgba(0,135,60,0.08)',   color: '#00873c' },
+  'Hold':       { bg: 'rgba(217,119,6,0.12)',  color: '#d97706' },
+  'Sell':       { bg: 'rgba(235,15,41,0.08)',  color: '#eb0f29' },
+  'Strong Sell':{ bg: 'rgba(235,15,41,0.12)',  color: '#eb0f29' },
+}
+
+function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.useLoaderData>['stock']> }) {
+  const [verdict, setVerdict] = useState<AiVerdict | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    setVerdict(null)
+    getAiVerdict({
+      data: {
+        symbol: stock.symbol,
+        shortName: stock.shortName,
+        price: stock.regularMarketPrice,
+        change: stock.regularMarketChange,
+        changePct: stock.regularMarketChangePercent,
+        open: stock.regularMarketOpen,
+        high: stock.regularMarketDayHigh,
+        low: stock.regularMarketDayLow,
+        previousClose: stock.previousClose,
+        volume: stock.regularMarketVolume,
+        marketCap: stock.marketCap,
+        fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+        marketState: stock.marketState,
+      },
+    })
+      .then(v => { setVerdict(v); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [stock.symbol])
+
+  const ratingStyle = verdict ? (RATING_STYLE[verdict.rating] ?? RATING_STYLE['Hold']) : null
+
   return (
-    <div className="card space-y-2">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="card">
+      <div className="flex items-center gap-2 mb-3">
         <span className="text-sm font-semibold" style={{ color: 'var(--color-primary)' }}>AI Verdict</span>
-        <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--color-surface)', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }}>Coming in M4</span>
+        <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--color-surface)', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }}>
+          Short-term · 1–5 days
+        </span>
+        {verdict && ratingStyle && (
+          <span className="ml-auto text-xs font-bold px-2 py-0.5 rounded" style={{ background: ratingStyle.bg, color: ratingStyle.color }}>
+            {verdict.rating}
+          </span>
+        )}
       </div>
-      <div className="space-y-2 animate-pulse">
-        <div className="h-3 rounded bg-[var(--color-border)] w-3/4" />
-        <div className="h-3 rounded bg-[var(--color-border)] w-1/2" />
-        <div className="h-3 rounded bg-[var(--color-border)] w-5/6" />
-      </div>
-      <p className="text-xs mt-2" style={{ color: 'var(--color-muted)' }}>AI analysis loading…</p>
+
+      {loading && (
+        <div className="space-y-2 animate-pulse">
+          <div className="h-3 rounded bg-[var(--color-border)] w-3/4" />
+          <div className="h-3 rounded bg-[var(--color-border)] w-1/2" />
+          <div className="h-3 rounded bg-[var(--color-border)] w-5/6" />
+          <p className="text-xs pt-1" style={{ color: 'var(--color-muted)' }}>Analysing with AI…</p>
+        </div>
+      )}
+
+      {!loading && !verdict && (
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          AI analysis unavailable — add <code className="text-xs">ANTHROPIC_API_KEY</code> to your environment.
+        </p>
+      )}
+
+      {!loading && verdict && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium" style={{ color: 'var(--color-fg)' }}>{verdict.summary}</p>
+          <ul className="space-y-1 mt-2">
+            {verdict.bullets.map((b, i) => (
+              <li key={i} className="flex gap-2 text-sm" style={{ color: 'var(--color-fg)' }}>
+                <span style={{ color: 'var(--color-primary)', flexShrink: 0 }}>•</span>
+                {b}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs mt-3 pt-2 border-t" style={{ color: 'var(--color-muted)', borderColor: 'var(--color-border)' }}>
+            {verdict.disclaimer}
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -343,7 +415,7 @@ function IndexPage() {
 
       {tab === 'Summary' && (
         <div className="space-y-4">
-          <AiVerdictSkeleton />
+          <AiVerdictCard stock={stock} />
           <Suspense fallback={<ChartSkeleton />}>
             <YFChart symbol={symbol} />
           </Suspense>
