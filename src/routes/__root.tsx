@@ -1,5 +1,7 @@
 import {
-  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+  createRootRoute,
   Link,
   Outlet,
   useRouterState,
@@ -7,7 +9,7 @@ import {
 import { createContext, useContext, useEffect, useState } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import "@/styles.css";
+import appCss from "@/styles.css?url";
 
 // ─── Auth context ─────────────────────────────────────────────────────────────
 
@@ -16,10 +18,7 @@ interface AuthContextValue {
   supabase: SupabaseClient;
 }
 
-const AuthContext = createContext<AuthContextValue>({
-  session: null,
-  supabase,
-});
+const AuthContext = createContext<AuthContextValue>({ session: null, supabase });
 
 export function useAuth() {
   return useContext(AuthContext);
@@ -27,16 +26,18 @@ export function useAuth() {
 
 // ─── Root route ───────────────────────────────────────────────────────────────
 
-interface RouterContext {
-  supabase?: SupabaseClient;
-  session?: Session | null;
-}
-
-export const RootRoute = createRootRouteWithContext<RouterContext>()({
-  component: RootComponent,
+export const Route = createRootRoute({
+  head: () => ({
+    meta: [
+      { charSet: "utf-8" },
+      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { title: "MyStockTrader" },
+      { name: "description", content: "AI-assisted equity research and paper-portfolio app" },
+    ],
+    links: [{ rel: "stylesheet", href: appCss }],
+  }),
+  shellComponent: RootDocument,
 });
-
-// ─── Nav links ────────────────────────────────────────────────────────────────
 
 const NAV_LINKS = [
   { to: "/", label: "Home" },
@@ -45,46 +46,38 @@ const NAV_LINKS = [
   { to: "/chat", label: "Chat" },
 ] as const;
 
-// ─── Root component ───────────────────────────────────────────────────────────
-
-function RootComponent() {
+function RootDocument({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-    });
-
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => subscription.unsubscribe();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ session, supabase }}>
-      <div className="min-h-dvh flex flex-col">
-        <Header session={session} />
-        <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl">
-          <Outlet />
-        </main>
-      </div>
-    </AuthContext.Provider>
+    <html lang="en">
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        <AuthContext.Provider value={{ session, supabase }}>
+          <div className="min-h-dvh flex flex-col">
+            <Header session={session} />
+            <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl">
+              {children}
+            </main>
+          </div>
+        </AuthContext.Provider>
+        <Scripts />
+      </body>
+    </html>
   );
 }
 
-// ─── Header / nav ─────────────────────────────────────────────────────────────
-
 function Header({ session }: { session: Session | null }) {
-  const routerState = useRouterState();
-  const currentPath = routerState.location.pathname;
-
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-  }
+  const state = useRouterState();
+  const path = state.location.pathname;
 
   return (
     <header
@@ -92,29 +85,26 @@ function Header({ session }: { session: Session | null }) {
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
     >
       <div className="container mx-auto px-4 max-w-7xl flex items-center justify-between h-14">
-        {/* Logo */}
         <Link to="/" className="font-bold text-lg" style={{ color: "var(--color-primary)" }}>
           MyStockTrader
         </Link>
 
-        {/* Primary nav */}
         <nav className="hidden sm:flex items-center gap-1">
           {NAV_LINKS.map(({ to, label }) => (
             <Link
               key={to}
               to={to}
               className="nav-link"
-              aria-current={currentPath === to ? "page" : undefined}
+              aria-current={path === to ? "page" : undefined}
             >
               {label}
             </Link>
           ))}
         </nav>
 
-        {/* Auth actions */}
         <div className="flex items-center gap-2">
           {session ? (
-            <button className="btn-ghost text-sm" onClick={handleSignOut}>
+            <button className="btn-ghost text-sm" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>
           ) : (

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.output/
+.wrangler/
+.env
+.env.local
+*.timestamp_*.js
+package-lock.json
