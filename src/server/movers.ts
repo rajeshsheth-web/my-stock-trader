@@ -8,7 +8,7 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = 4500) 
 }
 
 export const getTopMovers = createServerFn({ method: 'GET' })
-  .validator((cat: unknown) => {
+  .inputValidator((cat: unknown) => {
     const c = cat as string
     if (!['gainers','losers','active'].includes(c)) return 'gainers'
     return c

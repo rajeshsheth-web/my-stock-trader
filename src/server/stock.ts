@@ -31,7 +31,7 @@ async function getYFCrumb() {
 }
 
 export const getStockOverview = createServerFn({ method: 'GET' })
-  .validator((s: unknown) => {
+  .inputValidator((s: unknown) => {
     const sym = z.string().regex(SYMBOL_RE).parse(s)
     return sym
   })
@@ -69,7 +69,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
   })
 
 export const getRangeCandles = createServerFn({ method: 'GET' })
-  .validator((d: unknown) => z.object({
+  .inputValidator((d: unknown) => z.object({
     symbol: z.string().regex(SYMBOL_RE),
     range: z.string(),
     interval: z.string(),
