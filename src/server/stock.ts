@@ -47,6 +47,16 @@ function extractExtendedHours(result: any, regularPrice: number) {
       : (regularEnd > 0 ? regularEnd : regularMarketTime)
 
     let extPrice: number | null = null
+    // Find last regular-session candle close to use as comparison baseline.
+    // Yahoo Finance may update meta.regularMarketPrice to include after-hours,
+    // so we can't rely on it as the "regular close" reference.
+    let regularClose: number = regularPrice
+    if (boundary > 0 && !isPreMarket) {
+      const regCandles = ts
+        .map((t, i) => ({ t, c: closes[i] }))
+        .filter(({ t, c }) => c != null && c > 0 && t <= boundary)
+      if (regCandles.length) regularClose = regCandles[regCandles.length - 1].c
+    }
 
     if (boundary > 0) {
       const extCandles = ts
@@ -55,11 +65,10 @@ function extractExtendedHours(result: any, regularPrice: number) {
       if (extCandles.length) extPrice = extCandles[extCandles.length - 1].c
     }
 
+    if (extPrice == null) return null
 
-    if (extPrice == null || Math.abs(extPrice - regularPrice) < 0.001) return null
-
-    const extChange = extPrice - regularPrice
-    const extChangePct = regularPrice > 0 ? (extChange / regularPrice) * 100 : 0
+    const extChange = extPrice - regularClose
+    const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
 
     return {
       marketState: ms,
