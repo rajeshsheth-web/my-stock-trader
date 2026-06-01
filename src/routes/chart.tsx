@@ -78,6 +78,8 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
   const [livePrice, setLivePrice] = useState(stock.regularMarketPrice)
   const [liveChange, setLiveChange] = useState(stock.regularMarketChange)
   const [livePct, setLivePct] = useState(stock.regularMarketChangePercent)
+  const [extPrice, setExtPrice] = useState<number | null>(stock.preMarketPrice ?? stock.postMarketPrice ?? null)
+  const [marketState, setMarketState] = useState(stock.marketState)
 
   useEffect(() => {
     const id = setInterval(async () => {
@@ -87,6 +89,8 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
         setLivePrice(q.price)
         setLiveChange(q.change)
         setLivePct(q.changePct)
+        setExtPrice(q.preMarketPrice ?? q.postMarketPrice ?? null)
+        setMarketState(q.marketState)
       } catch {}
     }, 10_000)
     return () => clearInterval(id)
@@ -162,6 +166,30 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
               Vol: {fmtAbbrev(stock.regularMarketVolume)}
             </span>
           </div>
+          {extPrice != null && marketState !== 'REGULAR' && (
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              <span
+                className="text-xs font-semibold px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(217,119,6,0.1)', color: '#d97706', border: '1px solid rgba(217,119,6,0.3)' }}
+              >
+                {marketState === 'PRE' ? 'Pre-Market' : 'After Hours'}
+              </span>
+              <span className="text-sm font-semibold tabular-nums" style={{ color: 'var(--color-fg)' }}>
+                {fmtPrice(extPrice)}
+              </span>
+              {(() => {
+                const extChg = extPrice - livePrice
+                const extPct = livePrice > 0 ? (extChg / livePrice) * 100 : 0
+                const extSign = extChg >= 0 ? '+' : ''
+                const extClass = extChg >= 0 ? 'price-up' : 'price-down'
+                return (
+                  <span className={`text-xs tabular-nums ${extClass}`}>
+                    {extSign}{fmtPrice(extChg)} ({extSign}{extPct.toFixed(2)}%)
+                  </span>
+                )
+              })()}
+            </div>
+          )}
         </div>
         {/* Right: actions */}
         <div className="flex items-center gap-2 shrink-0">
