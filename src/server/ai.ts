@@ -38,7 +38,7 @@ export const getAiVerdict = createServerFn({ method: 'GET' })
 
     try {
       const genAI = new GoogleGenerativeAI(key)
-      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' })
 
       const pctFrom52High = s.fiftyTwoWeekHigh > 0
         ? ((s.price - s.fiftyTwoWeekHigh) / s.fiftyTwoWeekHigh) * 100
