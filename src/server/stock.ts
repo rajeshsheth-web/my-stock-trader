@@ -3,7 +3,8 @@ import { z } from 'zod'
 
 const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
 
-const YF_BASE = 'https://query1.finance.yahoo.com'
+const YF1 = 'https://query1.finance.yahoo.com'
+const YF2 = 'https://query2.finance.yahoo.com'
 
 async function yfFetch(url: string) {
   const r = await fetch(url, {
@@ -17,49 +18,63 @@ async function yfFetch(url: string) {
   return r.json()
 }
 
+// Fetch quote via v7 — returns pre/post market fields reliably
+async function fetchV7Quote(symbol: string) {
+  const fields = [
+    'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent',
+    'regularMarketVolume', 'regularMarketOpen', 'regularMarketDayHigh', 'regularMarketDayLow',
+    'regularMarketPreviousClose', 'regularMarketTime',
+    'shortName', 'longName', 'currency', 'fullExchangeName', 'exchange',
+    'fiftyTwoWeekHigh', 'fiftyTwoWeekLow', 'marketCap',
+    'marketState',
+    'preMarketPrice', 'preMarketChange', 'preMarketChangePercent', 'preMarketTime',
+    'postMarketPrice', 'postMarketChange', 'postMarketChangePercent', 'postMarketTime',
+  ].join(',')
+  const json = await yfFetch(
+    `${YF2}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}&fields=${fields}&formatted=false`
+  )
+  return json?.quoteResponse?.result?.[0] ?? null
+}
+
 // ─── getStockOverview ─────────────────────────────────────────────────────────
 
 export const getStockOverview = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const json = await yfFetch(
-        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=true`
-      )
-      const meta = json?.chart?.result?.[0]?.meta
-      if (!meta || !meta.regularMarketPrice) return null
+      const q = await fetchV7Quote(symbol)
+      if (!q || !q.regularMarketPrice) return null
 
-      const price: number = meta.regularMarketPrice
-      const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
-      const change = price - prevClose
-      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
-
-      const ms: string = meta.marketState ?? 'CLOSED'
+      const price: number = q.regularMarketPrice
+      const prevClose: number = q.regularMarketPreviousClose ?? price
+      const change: number = q.regularMarketChange ?? price - prevClose
+      const changePct: number = q.regularMarketChangePercent ?? 0
+      const ms: string = q.marketState ?? 'CLOSED'
 
       return {
         symbol,
-        shortName: meta.shortName ?? meta.longName ?? symbol,
+        shortName: q.shortName ?? q.longName ?? symbol,
         regularMarketPrice: price,
         regularMarketChange: change,
         regularMarketChangePercent: changePct,
-        regularMarketVolume: meta.regularMarketVolume ?? 0,
-        regularMarketOpen: meta.regularMarketOpen ?? 0,
-        regularMarketDayHigh: meta.regularMarketDayHigh ?? 0,
-        regularMarketDayLow: meta.regularMarketDayLow ?? 0,
-        fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? 0,
-        fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? 0,
-        marketCap: 0,
-        currency: meta.currency ?? 'USD',
-        exchangeName: meta.fullExchangeName ?? meta.exchangeName ?? '',
+        regularMarketVolume: q.regularMarketVolume ?? 0,
+        regularMarketOpen: q.regularMarketOpen ?? 0,
+        regularMarketDayHigh: q.regularMarketDayHigh ?? 0,
+        regularMarketDayLow: q.regularMarketDayLow ?? 0,
+        fiftyTwoWeekHigh: q.fiftyTwoWeekHigh ?? 0,
+        fiftyTwoWeekLow: q.fiftyTwoWeekLow ?? 0,
+        marketCap: q.marketCap ?? 0,
+        currency: q.currency ?? 'USD',
+        exchangeName: q.fullExchangeName ?? q.exchange ?? '',
         previousClose: prevClose,
         isMarketOpen: ms === 'REGULAR',
         marketState: ms,
-        preMarketPrice: meta.preMarketPrice ?? null,
-        preMarketChange: meta.preMarketChange ?? null,
-        preMarketChangePercent: meta.preMarketChangePercent ?? null,
-        postMarketPrice: meta.postMarketPrice ?? null,
-        postMarketChange: meta.postMarketChange ?? null,
-        postMarketChangePercent: meta.postMarketChangePercent ?? null,
+        preMarketPrice: q.preMarketPrice ?? null,
+        preMarketChange: q.preMarketChange ?? null,
+        preMarketChangePercent: q.preMarketChangePercent ?? null,
+        postMarketPrice: q.postMarketPrice ?? null,
+        postMarketChange: q.postMarketChange ?? null,
+        postMarketChangePercent: q.postMarketChangePercent ?? null,
       }
     } catch {
       return null
@@ -72,34 +87,31 @@ export const getStockQuote = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const json = await yfFetch(
-        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=true`
-      )
-      const meta = json?.chart?.result?.[0]?.meta
-      if (!meta || !meta.regularMarketPrice) return null
+      const q = await fetchV7Quote(symbol)
+      if (!q || !q.regularMarketPrice) return null
 
-      const price: number = meta.regularMarketPrice
-      const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
-      const change = price - prevClose
-      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
-      const ms: string = meta.marketState ?? 'CLOSED'
+      const price: number = q.regularMarketPrice
+      const prevClose: number = q.regularMarketPreviousClose ?? price
+      const change: number = q.regularMarketChange ?? price - prevClose
+      const changePct: number = q.regularMarketChangePercent ?? 0
+      const ms: string = q.marketState ?? 'CLOSED'
 
       return {
         price,
         change,
         changePct,
-        high: meta.regularMarketDayHigh ?? 0,
-        low: meta.regularMarketDayLow ?? 0,
-        open: meta.regularMarketOpen ?? 0,
+        high: q.regularMarketDayHigh ?? 0,
+        low: q.regularMarketDayLow ?? 0,
+        open: q.regularMarketOpen ?? 0,
         prevClose,
-        timestamp: meta.regularMarketTime ?? Math.floor(Date.now() / 1000),
+        timestamp: q.regularMarketTime ?? Math.floor(Date.now() / 1000),
         marketState: ms,
-        preMarketPrice: meta.preMarketPrice ?? null,
-        preMarketChange: meta.preMarketChange ?? null,
-        preMarketChangePercent: meta.preMarketChangePercent ?? null,
-        postMarketPrice: meta.postMarketPrice ?? null,
-        postMarketChange: meta.postMarketChange ?? null,
-        postMarketChangePercent: meta.postMarketChangePercent ?? null,
+        preMarketPrice: q.preMarketPrice ?? null,
+        preMarketChange: q.preMarketChange ?? null,
+        preMarketChangePercent: q.preMarketChangePercent ?? null,
+        postMarketPrice: q.postMarketPrice ?? null,
+        postMarketChange: q.postMarketChange ?? null,
+        postMarketChangePercent: q.postMarketChangePercent ?? null,
       }
     } catch {
       return null
@@ -119,7 +131,7 @@ export const getRangeCandles = createServerFn({ method: 'GET' })
   .handler(async ({ data: { symbol, range, interval } }) => {
     try {
       const json = await yfFetch(
-        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=true`
+        `${YF1}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=true`
       )
       const result = json?.chart?.result?.[0]
       if (!result) return []
