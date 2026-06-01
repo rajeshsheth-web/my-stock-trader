@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   createChart,
+  AreaSeries,
+  CandlestickSeries,
+  LineSeries,
+  BaselineSeries,
+  HistogramSeries,
   type IChartApi,
   type ISeriesApi,
-  type AreaSeriesOptions,
-  type CandlestickSeriesOptions,
-  type LineSeriesOptions,
-  type BaselineSeriesOptions,
-  type HistogramSeriesOptions,
 } from 'lightweight-charts'
 import { getRangeCandles } from '@/server/stock'
 
@@ -71,7 +71,7 @@ export function YFChart({ symbol }: YFChartProps) {
   const volumeRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const volChartRef = useRef<IChartApi | null>(null)
-  const priceSeriesRef = useRef<ISeriesApi<'Area'> | ISeriesApi<'Candlestick'> | ISeriesApi<'Line'> | ISeriesApi<'Baseline'> | null>(null)
+  const priceSeriesRef = useRef<ISeriesApi<'Area' | 'Candlestick' | 'Line' | 'Baseline'> | null>(null)
   const volSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
 
   // Fetch candles when symbol or range changes
@@ -179,39 +179,38 @@ export function YFChart({ symbol }: YFChartProps) {
     // Sort candles by time
     const sorted = [...candles].sort((a, b) => a.time - b.time)
 
-    let priceSeries: ISeriesApi<'Area'> | ISeriesApi<'Candlestick'> | ISeriesApi<'Line'> | ISeriesApi<'Baseline'>
+    let priceSeries: ISeriesApi<'Area' | 'Candlestick' | 'Line' | 'Baseline'>
 
     if (mode === 'Area') {
-      const s = chart.addAreaSeries({
+      const s = chart.addSeries(AreaSeries, {
         lineColor: COLORS.primary,
         topColor: COLORS.areaTop,
         bottomColor: COLORS.areaBottom,
         lineWidth: 2,
-      } as Partial<AreaSeriesOptions>)
+      })
       s.setData(sorted.map(c => ({ time: c.time as any, value: c.close })))
       priceSeries = s
     } else if (mode === 'Candlestick') {
-      const s = chart.addCandlestickSeries({
+      const s = chart.addSeries(CandlestickSeries, {
         upColor: COLORS.up,
         downColor: COLORS.down,
         borderUpColor: COLORS.up,
         borderDownColor: COLORS.down,
         wickUpColor: COLORS.up,
         wickDownColor: COLORS.down,
-      } as Partial<CandlestickSeriesOptions>)
+      })
       s.setData(sorted.map(c => ({ time: c.time as any, open: c.open, high: c.high, low: c.low, close: c.close })))
       priceSeries = s
     } else if (mode === 'Line') {
-      const s = chart.addLineSeries({
+      const s = chart.addSeries(LineSeries, {
         color: COLORS.primary,
         lineWidth: 2,
-      } as Partial<LineSeriesOptions>)
+      })
       s.setData(sorted.map(c => ({ time: c.time as any, value: c.close })))
       priceSeries = s
     } else {
-      // Baseline
       const baseValue = sorted[0]?.close ?? 0
-      const s = chart.addBaselineSeries({
+      const s = chart.addSeries(BaselineSeries, {
         baseValue: { type: 'price', price: baseValue },
         topLineColor: COLORS.up,
         topFillColor1: 'rgba(0,135,60,0.15)',
@@ -219,7 +218,7 @@ export function YFChart({ symbol }: YFChartProps) {
         bottomLineColor: COLORS.down,
         bottomFillColor1: 'rgba(235,15,41,0)',
         bottomFillColor2: 'rgba(235,15,41,0.15)',
-      } as Partial<BaselineSeriesOptions>)
+      })
       s.setData(sorted.map(c => ({ time: c.time as any, value: c.close })))
       priceSeries = s
     }
@@ -227,10 +226,10 @@ export function YFChart({ symbol }: YFChartProps) {
     priceSeriesRef.current = priceSeries
 
     // Volume
-    const volSeries = volChart.addHistogramSeries({
+    const volSeries = volChart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'right',
-    } as Partial<HistogramSeriesOptions>)
+    })
     volSeries.setData(
       sorted.map(c => ({
         time: c.time as any,
