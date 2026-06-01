@@ -100,12 +100,44 @@ export const getStockOverview = createServerFn({ method: 'GET' })
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
-      const ext = extractExtendedHours(result, price)
       const ts: number[] = result.timestamp ?? []
       const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
       const lastTs = ts[ts.length - 1] ?? 0
       const lastClose = closes[closes.length - 1] ?? 0
       const ctp = meta.currentTradingPeriod ?? {}
+
+      // Inline extended hours extraction (bypassing function for debug)
+      let ext: ReturnType<typeof extractExtendedHours> = null
+      let extErr = ''
+      try {
+        if (ms !== 'REGULAR') {
+          const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
+          const regularEnd: number = ctp.regular?.end ?? 0
+          const regularStart: number = ctp.regular?.start ?? 0
+          const regularMarketTime: number = meta.regularMarketTime ?? 0
+          const boundary = isPreMarket ? (regularStart > 0 ? regularStart : 0) : (regularEnd > 0 ? regularEnd : regularMarketTime)
+          const allPairs = ts.map((t: number, i: number) => ({ t, c: closes[i] as number | null }))
+          const regCandles = allPairs.filter(({t, c}) => c != null && (c as number) > 0 && t <= boundary)
+          const extCandles = allPairs.filter(({t, c}) => c != null && (c as number) > 0 && (isPreMarket ? t < boundary : t > boundary))
+          const regularClose = regCandles.length ? regCandles[regCandles.length - 1].c as number : price
+          const extPrice = extCandles.length ? extCandles[extCandles.length - 1].c as number : null
+          if (extPrice != null) {
+            const extChange = extPrice - regularClose
+            const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
+            ext = {
+              marketState: ms,
+              preMarketPrice: isPreMarket ? extPrice : null,
+              preMarketChange: isPreMarket ? extChange : null,
+              preMarketChangePercent: isPreMarket ? extChangePct : null,
+              postMarketPrice: !isPreMarket ? extPrice : null,
+              postMarketChange: !isPreMarket ? extChange : null,
+              postMarketChangePercent: !isPreMarket ? extChangePct : null,
+            }
+          }
+        }
+      } catch (e: any) {
+        extErr = String(e?.message ?? e)
+      }
 
       return {
         symbol,
@@ -150,6 +182,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
             lastTs,
             lastClose,
             extRaw: ext,
+            extErr,
           }
         })(),
       }
