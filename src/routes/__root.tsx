@@ -40,8 +40,8 @@ export const Route = createRootRoute({
 });
 
 const NAV_LINKS = [
-  { to: "/", label: "Home" },
-  { to: "/movers", label: "Movers" },
+  { to: "/", label: "Movers" },
+  { to: "/chart", label: "Chart" },
   { to: "/portfolio", label: "Portfolio" },
   { to: "/chat", label: "Chat" },
 ] as const;

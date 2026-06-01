@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
-import { getStockOverview } from '@/server/stock'
-import { useAuth } from './__root'
+import { useState, useEffect } from 'react'
+import { getTopMovers, getDayTradeRecs } from '@/server/movers'
+import type { DayTradeRec } from '@/server/movers'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -10,260 +10,360 @@ function fmtPrice(n: number) {
 }
 
 function fmtAbbrev(n: number) {
-  if (n >= 1e12) return (n / 1e12).toFixed(2) + 'T'
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
 }
 
-const TABS = ['Summary', 'Chart', 'Statistics', 'Historical', 'News', 'Holders'] as const
-type Tab = typeof TABS[number]
+type Category = 'gainers' | 'losers' | 'active' | 'recs'
+type Mover = {
+  symbol: string
+  shortName: string
+  regularMarketPrice: number
+  regularMarketChangePercent: number
+  regularMarketVolume: number
+}
+
+const TABS: { key: Category; label: string }[] = [
+  { key: 'gainers', label: 'Gainers' },
+  { key: 'losers', label: 'Losers' },
+  { key: 'active', label: 'Most Active' },
+  { key: 'recs', label: '⚡ Day Trade Picks' },
+]
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export const Route = createFileRoute('/')({
   validateSearch: (s: Record<string, unknown>) => ({
-    symbol: (s.symbol as string) ?? 'AAPL',
-    tab: (s.tab as Tab) ?? 'Summary',
+    cat: (s.cat as Category) ?? 'gainers',
   }),
-  loaderDeps: ({ search }) => ({ symbol: search.symbol }),
-  loader: async ({ deps }) => {
-    const data = await getStockOverview({ data: deps.symbol })
-    return { stock: data }
-  },
-  component: IndexPage,
+  component: MoversPage,
 })
 
-// ─── Components ───────────────────────────────────────────────────────────────
+// ─── Shared skeleton ──────────────────────────────────────────────────────────
 
-function SkeletonRow({ w = 'w-24' }: { w?: string }) {
-  return <span className={`inline-block h-4 rounded animate-pulse bg-[var(--color-border)] ${w}`} />
-}
-
-function TickerSearch() {
-  const navigate = useNavigate()
-  const { symbol } = Route.useSearch()
-  const [input, setInput] = useState(symbol)
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const sym = input.trim().toUpperCase()
-    if (sym) navigate({ to: '/', search: { symbol: sym, tab: 'Summary' } })
-  }
-
-  return (
-    <form onSubmit={submit} className="flex items-center gap-2">
-      <input
-        value={input}
-        onChange={e => setInput(e.target.value.toUpperCase())}
-        placeholder="Symbol…"
-        className="rounded-md border px-3 py-1.5 text-sm w-28 outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
-        style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-fg)' }}
-      />
-      <button type="submit" className="btn-primary text-sm py-1.5">Go</button>
-    </form>
-  )
-}
-
-function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.useLoaderData>['stock']> }) {
-  const navigate = useNavigate()
-  const { tab } = Route.useSearch()
-  const { session, supabase } = useAuth()
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-
-  const change = stock.regularMarketChange
-  const pct = stock.regularMarketChangePercent
-  const isUp = change >= 0
-  const priceClass = isUp ? 'price-up' : 'price-down'
-  const sign = isUp ? '+' : ''
-
-  async function addToWatchlist() {
-    if (!session) {
-      navigate({ to: '/auth' })
-      return
-    }
-    setSaving(true)
-    try {
-      // Try update first; if no row, insert
-      const userId = session.user.id
-      const { data: existing } = await supabase
-        .from('portfolios')
-        .select('id, symbols')
-        .eq('user_id', userId)
-        .eq('bucket', 'short')
-        .single()
-
-      if (existing) {
-        if (!existing.symbols.includes(stock.symbol)) {
-          await supabase
-            .from('portfolios')
-            .update({ symbols: [...existing.symbols, stock.symbol] })
-            .eq('id', existing.id)
-        }
-      } else {
-        await supabase.from('portfolios').insert({
-          user_id: userId,
-          bucket: 'short',
-          symbols: [stock.symbol],
-        })
-      }
-      setSaved(true)
-    } finally {
-      setSaving(false)
-    }
-  }
-
+function SkeletonRow({ cols = 4 }: { cols?: number }) {
   return (
     <div
-      className="sticky top-14 z-40 border-b"
-      style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)' }}
+      className="flex items-center gap-4 px-4 py-3 animate-pulse border-b"
+      style={{ borderColor: 'var(--color-border)' }}
     >
-      <div className="py-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        {/* Left: name + price */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl font-bold truncate" style={{ color: 'var(--color-fg)' }}>
-              {stock.shortName}
-            </h1>
-            <span className="text-sm font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--color-surface)', color: 'var(--color-muted)' }}>
-              {stock.symbol}
-            </span>
-            <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{stock.exchangeName}</span>
-          </div>
-          <div className="mt-1 flex items-baseline gap-3 flex-wrap">
-            <span className={`text-3xl font-bold tabular-nums ${priceClass}`}>
-              {fmtPrice(stock.regularMarketPrice)}
-            </span>
-            <span className={`text-base tabular-nums ${priceClass}`}>
-              {sign}{fmtPrice(change)} ({sign}{pct.toFixed(2)}%)
-            </span>
-            <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
-              Vol: {fmtAbbrev(stock.regularMarketVolume)}
-            </span>
-          </div>
+      {Array.from({ length: cols }).map((_, i) => (
+        <div key={i} className={`h-4 rounded bg-[var(--color-border)] ${i === 1 ? 'flex-1' : 'w-16'}`} />
+      ))}
+    </div>
+  )
+}
+
+// ─── Movers table (gainers / losers / active) ─────────────────────────────────
+
+function MoversTable({ cat }: { cat: 'gainers' | 'losers' | 'active' }) {
+  const navigate = useNavigate()
+  const [movers, setMovers] = useState<Mover[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(false)
+    getTopMovers({ data: cat })
+      .then((data) => { setMovers(data as Mover[]); setLoading(false) })
+      .catch(() => { setError(true); setLoading(false) })
+  }, [cat])
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div
+        className="grid grid-cols-[2fr_3fr_1fr_1fr] gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wide border-b"
+        style={{ color: 'var(--color-muted)', borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+      >
+        <span>Symbol</span><span>Name</span>
+        <span className="text-right">Price</span><span className="text-right">Change %</span>
+      </div>
+
+      {loading && Array.from({ length: 10 }).map((_, i) => <SkeletonRow key={i} />)}
+
+      {!loading && error && (
+        <div className="py-12 text-center">
+          <p className="text-sm" style={{ color: 'var(--color-bear)' }}>Failed to load. Please try again.</p>
         </div>
-        {/* Right: actions */}
-        <div className="flex items-center gap-2 shrink-0">
-          <TickerSearch />
+      )}
+
+      {!loading && !error && movers.length === 0 && (
+        <div className="py-12 text-center">
+          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>No data available. Markets may be closed.</p>
+        </div>
+      )}
+
+      {!loading && !error && movers.map((m) => {
+        const isUp = m.regularMarketChangePercent >= 0
+        const sign = isUp ? '+' : ''
+        const pctClass = isUp ? 'price-up' : 'price-down'
+        return (
           <button
-            onClick={addToWatchlist}
-            disabled={saving || saved}
-            className="btn-primary text-sm"
+            key={m.symbol}
+            onClick={() => navigate({ to: '/chart', search: { symbol: m.symbol, tab: 'Summary' } })}
+            className="w-full grid grid-cols-[2fr_3fr_1fr_1fr] gap-2 px-4 py-3 text-sm text-left hover:bg-[var(--color-surface)] transition-colors border-b last:border-0"
+            style={{ borderColor: 'var(--color-border)' }}
           >
-            {saved ? 'Added ✓' : saving ? 'Saving…' : '+ Watchlist'}
+            <span className="font-semibold" style={{ color: 'var(--color-primary)' }}>{m.symbol}</span>
+            <span className="truncate" style={{ color: 'var(--color-muted)' }}>{m.shortName}</span>
+            <span className="text-right tabular-nums font-medium" style={{ color: 'var(--color-fg)' }}>{fmtPrice(m.regularMarketPrice)}</span>
+            <span className={`text-right tabular-nums ${pctClass}`}>{sign}{m.regularMarketChangePercent.toFixed(2)}%</span>
           </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <nav className="flex gap-0 -mb-px overflow-x-auto">
-        {TABS.map(t => (
-          <button
-            key={t}
-            onClick={() => navigate({ to: '/', search: s => ({ ...s, tab: t }) })}
-            className="px-4 py-2 text-sm font-medium border-b-2 whitespace-nowrap transition-colors"
-            style={tab === t
-              ? { borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }
-              : { borderColor: 'transparent', color: 'var(--color-muted)' }}
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
+        )
+      })}
     </div>
   )
 }
 
-function KeyStats({ stock }: { stock: NonNullable<ReturnType<typeof Route.useLoaderData>['stock']> }) {
-  const rows = [
-    { label: 'Open', value: fmtPrice(stock.regularMarketOpen) },
-    { label: 'High', value: fmtPrice(stock.regularMarketDayHigh) },
-    { label: 'Low', value: fmtPrice(stock.regularMarketDayLow) },
-    { label: 'Prev Close', value: fmtPrice(stock.previousClose) },
-    { label: 'Volume', value: fmtAbbrev(stock.regularMarketVolume) },
-    { label: 'Mkt Cap', value: stock.marketCap ? fmtAbbrev(stock.marketCap) : '—' },
-    { label: '52W High', value: fmtPrice(stock.fiftyTwoWeekHigh) },
-    { label: '52W Low', value: fmtPrice(stock.fiftyTwoWeekLow) },
-  ]
+// ─── Score badge ──────────────────────────────────────────────────────────────
+
+function ScoreBadge({ score }: { score: number }) {
+  const color = score >= 70 ? 'var(--color-bull)' : score >= 45 ? '#d97706' : 'var(--color-muted)'
+  const label = score >= 70 ? 'Strong' : score >= 45 ? 'Moderate' : 'Weak'
   return (
-    <div className="card">
-      <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-muted)' }}>KEY STATISTICS</h2>
-      <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
-        {rows.map(({ label, value }) => (
-          <div key={label}>
-            <dt className="text-xs" style={{ color: 'var(--color-muted)' }}>{label}</dt>
-            <dd className="mt-0.5 text-sm font-semibold tabular-nums" style={{ color: 'var(--color-fg)' }}>{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+    <span
+      className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full"
+      style={{ color, background: `color-mix(in srgb, ${color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 30%, transparent)` }}
+    >
+      {score} · {label}
+    </span>
   )
 }
 
-function AiVerdictSkeleton() {
-  return (
-    <div className="card space-y-2">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-sm font-semibold" style={{ color: 'var(--color-primary)' }}>AI Verdict</span>
-        <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--color-surface)', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }}>Coming in M4</span>
-      </div>
-      <div className="space-y-2 animate-pulse">
-        <div className="h-3 rounded bg-[var(--color-border)] w-3/4" />
-        <div className="h-3 rounded bg-[var(--color-border)] w-1/2" />
-        <div className="h-3 rounded bg-[var(--color-border)] w-5/6" />
-      </div>
-      <p className="text-xs mt-2" style={{ color: 'var(--color-muted)' }}>AI analysis loading…</p>
-    </div>
-  )
-}
+// ─── Day Trade Picks ──────────────────────────────────────────────────────────
 
-function ComingSoon({ label }: { label: string }) {
-  return (
-    <div className="card flex items-center justify-center py-12 text-center">
-      <p className="text-sm" style={{ color: 'var(--color-muted)' }}>{label}</p>
-    </div>
-  )
-}
+function DayTradePicks() {
+  const navigate = useNavigate()
+  const [recs, setRecs] = useState<DayTradeRec[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  const [expanded, setExpanded] = useState<string | null>(null)
 
-function IndexPage() {
-  const { stock } = Route.useLoaderData()
-  const { symbol, tab } = Route.useSearch()
-
-  if (!stock) {
-    return (
-      <div className="space-y-4">
-        <div className="py-4 flex items-center justify-between gap-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <p className="text-sm font-medium" style={{ color: 'var(--color-bear)' }}>
-            Could not load {symbol} — markets may be closed or symbol is invalid.
-          </p>
-          <TickerSearch />
-        </div>
-        <div className="card py-16 text-center space-y-2">
-          <p className="font-semibold" style={{ color: 'var(--color-fg)' }}>No data available</p>
-          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>Try a different symbol or check back during market hours.</p>
-        </div>
-      </div>
-    )
-  }
+  useEffect(() => {
+    setLoading(true)
+    setError(false)
+    getDayTradeRecs()
+      .then((data) => { setRecs(data as DayTradeRec[]); setLoading(false) })
+      .catch(() => { setError(true); setLoading(false) })
+  }, [])
 
   return (
     <div className="space-y-4">
-      <QuoteHeader stock={stock} />
+      {/* Header card */}
+      <div className="card flex items-start gap-3">
+        <div className="text-2xl leading-none select-none">⚡</div>
+        <div>
+          <p className="font-semibold text-sm" style={{ color: 'var(--color-fg)' }}>
+            Day Trade Picks — 2–5% ROI target
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            Stocks showing volume surge + intraday momentum. Scored on conviction,
+            range, and structure. Entry is current ask; use a 1% stop-loss.
+            <span className="ml-1 font-medium" style={{ color: 'var(--color-bear)' }}>
+              Not financial advice.
+            </span>
+          </p>
+        </div>
+      </div>
 
-      {tab === 'Summary' && (
-        <div className="space-y-4">
-          <AiVerdictSkeleton />
-          <KeyStats stock={stock} />
-          <ComingSoon label="Interactive chart coming in M3" />
+      {loading && (
+        <div className="card p-0 overflow-hidden">
+          {Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} cols={6} />)}
         </div>
       )}
-      {tab === 'Chart' && <ComingSoon label="Chart coming in M3" />}
-      {tab === 'Statistics' && <ComingSoon label="Detailed statistics coming soon" />}
-      {tab === 'Historical' && <ComingSoon label="Historical data coming soon" />}
-      {tab === 'News' && <ComingSoon label="News feed coming soon" />}
-      {tab === 'Holders' && <ComingSoon label="Holder data coming soon" />}
+
+      {!loading && error && (
+        <div className="card py-12 text-center">
+          <p className="text-sm" style={{ color: 'var(--color-bear)' }}>
+            Failed to load recommendations. Markets may be closed.
+          </p>
+        </div>
+      )}
+
+      {!loading && !error && recs.length === 0 && (
+        <div className="card py-12 text-center space-y-2">
+          <p className="font-semibold" style={{ color: 'var(--color-fg)' }}>No picks right now</p>
+          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+            No stocks currently meet the liquidity + momentum criteria.
+            Try again during active market hours (9:30 AM – 4:00 PM ET).
+          </p>
+        </div>
+      )}
+
+      {!loading && !error && recs.map((rec) => {
+        const roiPct = ((rec.target - rec.entry) / rec.entry * 100).toFixed(1)
+        const riskPct = ((rec.entry - rec.stop) / rec.entry * 100).toFixed(1)
+        const isOpen = expanded === rec.symbol
+
+        return (
+          <div key={rec.symbol} className="card p-0 overflow-hidden">
+            {/* Summary row */}
+            <button
+              className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-[var(--color-surface)] transition-colors"
+              onClick={() => setExpanded(isOpen ? null : rec.symbol)}
+            >
+              {/* Rank/score */}
+              <ScoreBadge score={rec.score} />
+
+              {/* Ticker + name */}
+              <div className="flex-1 min-w-0">
+                <span className="font-bold text-sm" style={{ color: 'var(--color-primary)' }}>
+                  {rec.symbol}
+                </span>
+                <span className="ml-2 text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                  {rec.shortName}
+                </span>
+              </div>
+
+              {/* Price + change */}
+              <div className="text-right shrink-0">
+                <div className="font-semibold tabular-nums text-sm" style={{ color: 'var(--color-fg)' }}>
+                  ${fmtPrice(rec.price)}
+                </div>
+                <div className="text-xs tabular-nums price-up">
+                  +{rec.changePercent.toFixed(2)}%
+                </div>
+              </div>
+
+              {/* Target ROI */}
+              <div className="text-right shrink-0 hidden sm:block">
+                <div className="text-xs font-semibold" style={{ color: 'var(--color-muted)' }}>Target ROI</div>
+                <div className="text-sm font-bold price-up">+{roiPct}%</div>
+              </div>
+
+              {/* Expand chevron */}
+              <svg
+                className="shrink-0 transition-transform"
+                style={{ transform: isOpen ? 'rotate(180deg)' : 'none', color: 'var(--color-muted)' }}
+                width="16" height="16" viewBox="0 0 16 16" fill="none"
+              >
+                <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+
+            {/* Expanded detail */}
+            {isOpen && (
+              <div
+                className="border-t px-4 py-4 space-y-4"
+                style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+              >
+                {/* Entry / Target / Stop grid */}
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="rounded-lg p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                    <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--color-muted)' }}>Entry</div>
+                    <div className="text-lg font-bold tabular-nums" style={{ color: 'var(--color-fg)' }}>${fmtPrice(rec.entry)}</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>Market ask</div>
+                  </div>
+                  <div className="rounded-lg p-3" style={{ background: 'var(--color-bg)', border: `1px solid var(--color-bull)` }}>
+                    <div className="text-xs font-semibold uppercase tracking-wide mb-1 price-up">Target</div>
+                    <div className="text-lg font-bold tabular-nums price-up">${fmtPrice(rec.target)}</div>
+                    <div className="text-xs price-up mt-0.5">+{roiPct}% ROI</div>
+                  </div>
+                  <div className="rounded-lg p-3" style={{ background: 'var(--color-bg)', border: `1px solid var(--color-bear)` }}>
+                    <div className="text-xs font-semibold uppercase tracking-wide mb-1 price-down">Stop</div>
+                    <div className="text-lg font-bold tabular-nums price-down">${fmtPrice(rec.stop)}</div>
+                    <div className="text-xs price-down mt-0.5">−{riskPct}% risk</div>
+                  </div>
+                </div>
+
+                {/* Signals + stats */}
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--color-muted)' }}>Volume</span>
+                    <div className="tabular-nums font-medium mt-0.5" style={{ color: 'var(--color-fg)' }}>
+                      {fmtAbbrev(rec.volume)}
+                      {rec.avgVolume > 0 && (
+                        <span className="ml-1 text-xs" style={{ color: 'var(--color-muted)' }}>
+                          ({rec.volumeSurge.toFixed(1)}× avg)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--color-muted)' }}>Intraday Range</span>
+                    <div className="tabular-nums font-medium mt-0.5" style={{ color: 'var(--color-fg)' }}>
+                      {rec.intradayRange.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--color-muted)' }}>Risk/Reward</span>
+                    <div className="tabular-nums font-medium mt-0.5" style={{ color: 'var(--color-fg)' }}>
+                      1 : {(Number(roiPct) / Number(riskPct)).toFixed(1)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Signals list */}
+                {rec.signals.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {rec.signals.map((sig) => (
+                      <span
+                        key={sig}
+                        className="text-xs px-2 py-0.5 rounded-full"
+                        style={{
+                          background: 'color-mix(in srgb, var(--color-primary) 10%, transparent)',
+                          color: 'var(--color-primary)',
+                          border: '1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)',
+                        }}
+                      >
+                        {sig}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* View chart CTA */}
+                <button
+                  onClick={() => navigate({ to: '/chart', search: { symbol: rec.symbol, tab: 'Chart' } })}
+                  className="btn-primary text-sm w-full sm:w-auto"
+                >
+                  View {rec.symbol} chart →
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+function MoversPage() {
+  const { cat } = Route.useSearch()
+  const navigate = useNavigate()
+
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold" style={{ color: 'var(--color-fg)' }}>Market Movers</h1>
+
+      {/* Tab bar */}
+      <div className="flex border-b" style={{ borderColor: 'var(--color-border)' }}>
+        {TABS.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => navigate({ to: '/', search: { cat: key } })}
+            className="px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap transition-colors"
+            style={
+              cat === key
+                ? { borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }
+                : { borderColor: 'transparent', color: 'var(--color-muted)' }
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {cat === 'recs' ? (
+        <DayTradePicks />
+      ) : (
+        <MoversTable cat={cat} />
+      )}
     </div>
   )
 }
