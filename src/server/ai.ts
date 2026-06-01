@@ -1,6 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const StockInput = z.object({
   symbol: z.string(),
@@ -33,19 +32,14 @@ export type AiVerdict = {
 export const getAiVerdict = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => StockInput.parse(d))
   .handler(async ({ data: s }): Promise<AiVerdict | null> => {
-    const key = process.env.GEMINI_API_KEY || ''
+    const key = process.env.OPENROUTER_API_KEY || ''
     if (!key) return { error: 'no_key' as const }
 
     try {
-      const genAI = new GoogleGenerativeAI(key)
-      const model = genAI.getGenerativeModel({ model: 'gemini-pro' })
-
       const pctFrom52High = s.fiftyTwoWeekHigh > 0
-        ? ((s.price - s.fiftyTwoWeekHigh) / s.fiftyTwoWeekHigh) * 100
-        : 0
+        ? ((s.price - s.fiftyTwoWeekHigh) / s.fiftyTwoWeekHigh) * 100 : 0
       const pctFrom52Low = s.fiftyTwoWeekLow > 0
-        ? ((s.price - s.fiftyTwoWeekLow) / s.fiftyTwoWeekLow) * 100
-        : 0
+        ? ((s.price - s.fiftyTwoWeekLow) / s.fiftyTwoWeekLow) * 100 : 0
       const intradayRange = s.low > 0 ? ((s.high - s.low) / s.low) * 100 : 0
 
       const prompt = `You are a concise equity analyst. Based solely on the intraday technical snapshot below, provide a short-term (1–5 day) trading verdict.
@@ -69,9 +63,30 @@ Respond with ONLY valid JSON, no markdown fences:
 
 Base bullets on: price vs open, intraday range, proximity to 52W extremes, and day's momentum. Be direct and specific.`
 
-      const result = await model.generateContent(prompt)
-      const text = result.response.text().trim().replace(/^```json\n?|\n?```$/g, '')
-      const parsed = JSON.parse(text)
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://mystocktrader.vercel.app',
+          'X-Title': 'MyStockTrader',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-flash-1.5',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 300,
+        }),
+        signal: AbortSignal.timeout(15000),
+      })
+
+      if (!res.ok) {
+        const txt = await res.text()
+        return { error: 'api_error' as const, detail: `HTTP ${res.status}: ${txt.slice(0, 200)}` }
+      }
+
+      const json = await res.json()
+      const text = json.choices?.[0]?.message?.content?.trim() ?? ''
+      const parsed = JSON.parse(text.replace(/^```json\n?|\n?```$/g, ''))
 
       return {
         rating: parsed.rating,

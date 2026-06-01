@@ -348,7 +348,7 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
 
       {!loading && verdict && 'error' in verdict && verdict.error === 'no_key' && (
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          Add <code className="text-xs px-1 rounded" style={{ background: 'var(--color-surface)' }}>GEMINI_API_KEY</code> to Vercel environment variables and redeploy.
+          Add <code className="text-xs px-1 rounded" style={{ background: 'var(--color-surface)' }}>OPENROUTER_API_KEY</code> to Vercel environment variables and redeploy.
         </p>
       )}
 
