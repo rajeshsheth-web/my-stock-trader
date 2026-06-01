@@ -316,11 +316,12 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
         marketState: stock.marketState,
       },
     })
-      .then(v => { setVerdict(v); setLoading(false) })
-      .catch(() => setLoading(false))
+      .then(v => { setVerdict(v ?? null); setLoading(false) })
+      .catch(() => { setVerdict({ error: 'api_error' }); setLoading(false) })
   }, [stock.symbol])
 
-  const ratingStyle = verdict ? (RATING_STYLE[verdict.rating] ?? RATING_STYLE['Hold']) : null
+  const hasVerdict = verdict && !('error' in verdict)
+  const ratingStyle = hasVerdict ? (RATING_STYLE[(verdict as any).rating] ?? RATING_STYLE['Hold']) : null
 
   return (
     <div className="card">
@@ -329,9 +330,9 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
         <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--color-surface)', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }}>
           Short-term · 1–5 days
         </span>
-        {verdict && ratingStyle && (
+        {hasVerdict && ratingStyle && (
           <span className="ml-auto text-xs font-bold px-2 py-0.5 rounded" style={{ background: ratingStyle.bg, color: ratingStyle.color }}>
-            {verdict.rating}
+            {(verdict as any).rating}
           </span>
         )}
       </div>
@@ -345,28 +346,37 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
         </div>
       )}
 
-      {!loading && !verdict && (
+      {!loading && verdict && 'error' in verdict && verdict.error === 'no_key' && (
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          AI analysis unavailable — add <code className="text-xs">ANTHROPIC_API_KEY</code> to your environment.
+          Add <code className="text-xs px-1 rounded" style={{ background: 'var(--color-surface)' }}>ANTHROPIC_API_KEY</code> to Vercel environment variables and redeploy.
         </p>
       )}
 
-      {!loading && verdict && (
-        <div className="space-y-2">
-          <p className="text-sm font-medium" style={{ color: 'var(--color-fg)' }}>{verdict.summary}</p>
-          <ul className="space-y-1 mt-2">
-            {verdict.bullets.map((b, i) => (
-              <li key={i} className="flex gap-2 text-sm" style={{ color: 'var(--color-fg)' }}>
-                <span style={{ color: 'var(--color-primary)', flexShrink: 0 }}>•</span>
-                {b}
-              </li>
-            ))}
-          </ul>
-          <p className="text-xs mt-3 pt-2 border-t" style={{ color: 'var(--color-muted)', borderColor: 'var(--color-border)' }}>
-            {verdict.disclaimer}
-          </p>
-        </div>
+      {!loading && verdict && 'error' in verdict && verdict.error === 'api_error' && (
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          AI analysis failed — check your API key is valid and has available credits.
+        </p>
       )}
+
+      {!loading && hasVerdict && (() => {
+        const v = verdict as Extract<AiVerdict, { rating: string }>
+        return (
+          <div className="space-y-2">
+            <p className="text-sm font-medium" style={{ color: 'var(--color-fg)' }}>{v.summary}</p>
+            <ul className="space-y-1 mt-2">
+              {v.bullets.map((b, i) => (
+                <li key={i} className="flex gap-2 text-sm" style={{ color: 'var(--color-fg)' }}>
+                  <span style={{ color: 'var(--color-primary)', flexShrink: 0 }}>•</span>
+                  {b}
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs mt-3 pt-2 border-t" style={{ color: 'var(--color-muted)', borderColor: 'var(--color-border)' }}>
+              {v.disclaimer}
+            </p>
+          </div>
+        )
+      })()}
     </div>
   )
 }

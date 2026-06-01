@@ -24,13 +24,16 @@ export type AiVerdict = {
   summary: string
   bullets: string[]
   disclaimer: string
+  error?: never
+} | {
+  error: 'no_key' | 'api_error'
 }
 
 export const getAiVerdict = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => StockInput.parse(d))
   .handler(async ({ data: s }): Promise<AiVerdict | null> => {
-    const key = process.env.ANTHROPIC_API_KEY
-    if (!key) return null
+    const key = process.env.ANTHROPIC_API_KEY || ''
+    if (!key) return { error: 'no_key' as const }
 
     try {
       const client = new Anthropic({ apiKey: key })
@@ -80,6 +83,6 @@ Base bullets on: price vs open, intraday range, proximity to 52W extremes, and d
         disclaimer: 'AI analysis is for informational purposes only, not financial advice.',
       }
     } catch {
-      return null
+      return { error: 'api_error' as const }
     }
   })
