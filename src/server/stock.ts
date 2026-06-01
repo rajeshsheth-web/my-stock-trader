@@ -111,6 +111,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         postMarketPrice: ext?.postMarketPrice ?? null,
         postMarketChange: ext?.postMarketChange ?? null,
         postMarketChangePercent: ext?.postMarketChangePercent ?? null,
+        _d: `ms=${ms} post=${ext?.postMarketPrice ?? 'null'}`,
       }
     } catch {
       return null

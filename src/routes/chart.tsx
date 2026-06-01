@@ -202,7 +202,8 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
               Vol: {fmtAbbrev(stock.regularMarketVolume)}
             </span>
           </div>
-{extData != null && (
+          {'_d' in stock && <div className="text-xs font-mono mt-1 opacity-60">{(stock as any)._d}</div>}
+          {extData != null && (
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <span
                 className="text-xs font-semibold px-1.5 py-0.5 rounded"
