@@ -32,6 +32,7 @@ export type AiVerdict = {
 const GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
 
 async function callGemini(key: string, prompt: string): Promise<string> {
+  const errors: string[] = []
   for (const model of GEMINI_MODELS) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
     const res = await fetch(url, {
@@ -40,15 +41,18 @@ async function callGemini(key: string, prompt: string): Promise<string> {
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
       signal: AbortSignal.timeout(15000),
     })
-    if (res.status === 404) continue  // try next model
+    if (res.status === 404) {
+      errors.push(`${model}=404`)
+      continue
+    }
     if (!res.ok) {
       const txt = await res.text()
-      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 300)}`)
+      throw new Error(`${model} HTTP ${res.status}: ${txt.slice(0, 200)}`)
     }
     const json = await res.json()
     return json.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
   }
-  throw new Error('No Gemini model available')
+  throw new Error(`All models 404 [${errors.join(', ')}] — Generative Language API may not be enabled in your Google Cloud project`)
 }
 
 export const getAiVerdict = createServerFn({ method: 'GET' })
