@@ -3,7 +3,6 @@ import { z } from 'zod'
 
 const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
 const YF1 = 'https://query1.finance.yahoo.com'
-const YF2 = 'https://query2.finance.yahoo.com'
 
 async function yfFetch(url: string) {
   const r = await fetch(url, {
@@ -25,14 +24,42 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
   return json?.chart?.result?.[0] ?? null
 }
 
-// v7 quote endpoint — returns pre/post market fields; may be blocked, used as optional enrichment
-async function fetchExtendedHours(symbol: string) {
+// Extract extended hours price from the v8 chart result's candle data.
+// When includePrePost=true the last candle after regular close is the AH/PM price.
+function extractExtendedHours(result: any, regularPrice: number) {
   try {
-    const fields = 'marketState,preMarketPrice,preMarketChange,preMarketChangePercent,postMarketPrice,postMarketChange,postMarketChangePercent'
-    const json = await yfFetch(
-      `${YF2}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}&fields=${fields}&formatted=false`
-    )
-    return json?.quoteResponse?.result?.[0] ?? null
+    const ms: string = result.meta?.marketState ?? 'REGULAR'
+    if (ms === 'REGULAR') return null
+
+    const ts: number[] = result.timestamp ?? []
+    const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
+    if (!ts.length) return null
+
+    // Regular market close time from meta
+    const regularCloseTime: number = result.meta?.regularMarketTime ?? 0
+
+    // For PRE: find candles before regular open; for POST/CLOSED: after regular close
+    const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
+    const extCandles = ts
+      .map((t, i) => ({ t, c: closes[i] }))
+      .filter(({ t, c }) => c != null && c > 0 && (isPreMarket ? t < regularCloseTime : t > regularCloseTime))
+
+    if (!extCandles.length) return null
+
+    const extPrice = extCandles[extCandles.length - 1].c
+    const base = regularPrice
+    const extChange = extPrice - base
+    const extChangePct = base > 0 ? (extChange / base) * 100 : 0
+
+    return {
+      marketState: ms,
+      preMarketPrice: isPreMarket ? extPrice : null,
+      preMarketChange: isPreMarket ? extChange : null,
+      preMarketChangePercent: isPreMarket ? extChangePct : null,
+      postMarketPrice: !isPreMarket ? extPrice : null,
+      postMarketChange: !isPreMarket ? extChange : null,
+      postMarketChangePercent: !isPreMarket ? extChangePct : null,
+    }
   } catch {
     return null
   }
@@ -44,11 +71,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const [result, ext] = await Promise.all([
-        fetchChart(symbol),
-        fetchExtendedHours(symbol),
-      ])
-
+      const result = await fetchChart(symbol, '1d', '5m')
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
@@ -57,7 +80,8 @@ export const getStockOverview = createServerFn({ method: 'GET' })
       const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
-      const ms: string = ext?.marketState ?? meta.marketState ?? 'CLOSED'
+      const ms: string = meta.marketState ?? 'CLOSED'
+      const ext = extractExtendedHours(result, price)
 
       return {
         symbol,
@@ -95,11 +119,7 @@ export const getStockQuote = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const [result, ext] = await Promise.all([
-        fetchChart(symbol),
-        fetchExtendedHours(symbol),
-      ])
-
+      const result = await fetchChart(symbol, '1d', '5m')
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
@@ -108,7 +128,8 @@ export const getStockQuote = createServerFn({ method: 'GET' })
       const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
-      const ms: string = ext?.marketState ?? meta.marketState ?? 'CLOSED'
+      const ms: string = meta.marketState ?? 'CLOSED'
+      const ext = extractExtendedHours(result, price)
 
       return {
         price,
