@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const StockInput = z.object({
   symbol: z.string(),
@@ -32,11 +32,12 @@ export type AiVerdict = {
 export const getAiVerdict = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => StockInput.parse(d))
   .handler(async ({ data: s }): Promise<AiVerdict | null> => {
-    const key = process.env.ANTHROPIC_API_KEY || ''
+    const key = process.env.GEMINI_API_KEY || ''
     if (!key) return { error: 'no_key' as const }
 
     try {
-      const client = new Anthropic({ apiKey: key })
+      const genAI = new GoogleGenerativeAI(key)
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
       const pctFrom52High = s.fiftyTwoWeekHigh > 0
         ? ((s.price - s.fiftyTwoWeekHigh) / s.fiftyTwoWeekHigh) * 100
@@ -58,7 +59,7 @@ Intraday range: ${intradayRange.toFixed(1)}%
 Market Cap: ${s.marketCap > 0 ? '$' + (s.marketCap / 1e9).toFixed(1) + 'B' : 'N/A'}
 Market State: ${s.marketState}
 
-Respond with ONLY valid JSON matching this exact shape:
+Respond with ONLY valid JSON, no markdown fences:
 {
   "rating": "<Strong Buy|Buy|Hold|Sell|Strong Sell>",
   "summary": "<one sentence, ≤20 words>",
@@ -67,14 +68,9 @@ Respond with ONLY valid JSON matching this exact shape:
 
 Base bullets on: price vs open, intraday range, proximity to 52W extremes, and day's momentum. Be direct and specific.`
 
-      const msg = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }],
-      })
-
-      const text = msg.content[0].type === 'text' ? msg.content[0].text.trim() : ''
-      const parsed = JSON.parse(text.replace(/^```json\n?|\n?```$/g, ''))
+      const result = await model.generateContent(prompt)
+      const text = result.response.text().trim().replace(/^```json\n?|\n?```$/g, '')
+      const parsed = JSON.parse(text)
 
       return {
         rating: parsed.rating,
