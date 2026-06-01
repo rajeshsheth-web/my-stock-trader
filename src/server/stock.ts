@@ -39,9 +39,13 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         exchangeName: q.fullExchangeName ?? q.exchange ?? '',
         previousClose: q.regularMarketPreviousClose ?? 0,
         isMarketOpen: q.marketState === 'REGULAR',
-        // Extended-hours price
+        // Extended-hours fields
         preMarketPrice: q.preMarketPrice ?? null,
+        preMarketChange: q.preMarketChange ?? null,
+        preMarketChangePercent: q.preMarketChangePercent ?? null,
         postMarketPrice: q.postMarketPrice ?? null,
+        postMarketChange: q.postMarketChange ?? null,
+        postMarketChangePercent: q.postMarketChangePercent ?? null,
         marketState: q.marketState ?? 'CLOSED',
       }
     } catch {
@@ -72,7 +76,11 @@ export const getStockQuote = createServerFn({ method: 'GET' })
         timestamp: q.regularMarketTime ? Math.floor(new Date(q.regularMarketTime).getTime() / 1000) : Math.floor(Date.now() / 1000),
         marketState: q.marketState ?? 'CLOSED',
         preMarketPrice: q.preMarketPrice ?? null,
+        preMarketChange: q.preMarketChange ?? null,
+        preMarketChangePercent: q.preMarketChangePercent ?? null,
         postMarketPrice: q.postMarketPrice ?? null,
+        postMarketChange: q.postMarketChange ?? null,
+        postMarketChangePercent: q.postMarketChangePercent ?? null,
       }
     } catch {
       return null

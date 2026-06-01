@@ -78,7 +78,18 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
   const [livePrice, setLivePrice] = useState(stock.regularMarketPrice)
   const [liveChange, setLiveChange] = useState(stock.regularMarketChange)
   const [livePct, setLivePct] = useState(stock.regularMarketChangePercent)
-  const [extPrice, setExtPrice] = useState<number | null>(stock.preMarketPrice ?? stock.postMarketPrice ?? null)
+  const isPreMarket = (s: string) => s === 'PRE' || s === 'PREPRE'
+  const isPostMarket = (s: string) => s === 'POST' || s === 'POSTPOST'
+
+  function extInfo(q: typeof stock) {
+    if (isPreMarket(q.marketState) && q.preMarketPrice != null)
+      return { price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' }
+    if ((isPostMarket(q.marketState) || q.marketState === 'CLOSED') && q.postMarketPrice != null)
+      return { price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' }
+    return null
+  }
+
+  const [extData, setExtData] = useState(() => extInfo(stock))
   const [marketState, setMarketState] = useState(stock.marketState)
 
   useEffect(() => {
@@ -89,8 +100,14 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
         setLivePrice(q.price)
         setLiveChange(q.change)
         setLivePct(q.changePct)
-        setExtPrice(q.preMarketPrice ?? q.postMarketPrice ?? null)
         setMarketState(q.marketState)
+        const ms = q.marketState
+        if ((ms === 'PRE' || ms === 'PREPRE') && q.preMarketPrice != null)
+          setExtData({ price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' })
+        else if ((ms === 'POST' || ms === 'POSTPOST' || ms === 'CLOSED') && q.postMarketPrice != null)
+          setExtData({ price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' })
+        else
+          setExtData(null)
       } catch {}
     }, 10_000)
     return () => clearInterval(id)
@@ -166,25 +183,23 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
               Vol: {fmtAbbrev(stock.regularMarketVolume)}
             </span>
           </div>
-          {extPrice != null && marketState !== 'REGULAR' && (
+          {extData != null && (
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <span
                 className="text-xs font-semibold px-1.5 py-0.5 rounded"
                 style={{ background: 'rgba(217,119,6,0.1)', color: '#d97706', border: '1px solid rgba(217,119,6,0.3)' }}
               >
-                {marketState === 'PRE' ? 'Pre-Market' : 'After Hours'}
+                {extData.label}
               </span>
               <span className="text-sm font-semibold tabular-nums" style={{ color: 'var(--color-fg)' }}>
-                {fmtPrice(extPrice)}
+                {fmtPrice(extData.price)}
               </span>
-              {(() => {
-                const extChg = extPrice - livePrice
-                const extPct = livePrice > 0 ? (extChg / livePrice) * 100 : 0
-                const extSign = extChg >= 0 ? '+' : ''
-                const extClass = extChg >= 0 ? 'price-up' : 'price-down'
+              {extData.change != null && extData.pct != null && (() => {
+                const sign = extData.change! >= 0 ? '+' : ''
+                const cls = extData.change! >= 0 ? 'price-up' : 'price-down'
                 return (
-                  <span className={`text-xs tabular-nums ${extClass}`}>
-                    {extSign}{fmtPrice(extChg)} ({extSign}{extPct.toFixed(2)}%)
+                  <span className={`text-xs tabular-nums ${cls}`}>
+                    {sign}{fmtPrice(extData.change!)} ({sign}{extData.pct!.toFixed(2)}%)
                   </span>
                 )
               })()}
