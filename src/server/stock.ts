@@ -36,10 +36,15 @@ function extractExtendedHours(result: any, regularPrice: number) {
 
     const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
 
-    // Use currentTradingPeriod for accurate session boundary
+    // Use the most recent regular session boundary
     const regularEnd: number = result.meta?.currentTradingPeriod?.regular?.end ?? 0
     const regularStart: number = result.meta?.currentTradingPeriod?.regular?.start ?? 0
-    const boundary = isPreMarket ? regularStart : regularEnd
+    // Fallback: use regularMarketTime (last regular close timestamp) when boundary is unavailable
+    const regularMarketTime: number = result.meta?.regularMarketTime ?? 0
+
+    const boundary = isPreMarket
+      ? (regularStart > 0 ? regularStart : 0)
+      : (regularEnd > 0 ? regularEnd : regularMarketTime)
 
     let extPrice: number | null = null
 
@@ -50,14 +55,8 @@ function extractExtendedHours(result: any, regularPrice: number) {
       if (extCandles.length) extPrice = extCandles[extCandles.length - 1].c
     }
 
-    // Fallback: just use the very last non-null candle
-    if (extPrice == null) {
-      for (let i = closes.length - 1; i >= 0; i--) {
-        if (closes[i] != null && closes[i] > 0) { extPrice = closes[i]; break }
-      }
-    }
 
-    if (extPrice == null || extPrice === regularPrice) return null
+    if (extPrice == null || Math.abs(extPrice - regularPrice) < 0.001) return null
 
     const extChange = extPrice - regularPrice
     const extChangePct = regularPrice > 0 ? (extChange / regularPrice) * 100 : 0
@@ -82,7 +81,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const result = await fetchChart(symbol, '1d', '5m')
+      const result = await fetchChart(symbol, '5d', '15m')
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
@@ -130,7 +129,7 @@ export const getStockQuote = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const result = await fetchChart(symbol, '1d', '5m')
+      const result = await fetchChart(symbol, '5d', '15m')
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
