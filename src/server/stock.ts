@@ -92,6 +92,11 @@ export const getStockOverview = createServerFn({ method: 'GET' })
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
       const ext = extractExtendedHours(result, price)
+      const ts: number[] = result.timestamp ?? []
+      const closes: number[] = result.indicators?.quote?.[0]?.close ?? []
+      const lastTs = ts[ts.length - 1] ?? 0
+      const lastClose = closes[closes.length - 1] ?? 0
+      const ctp = meta.currentTradingPeriod ?? {}
 
       return {
         symbol,
@@ -117,6 +122,18 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         postMarketPrice: ext?.postMarketPrice ?? null,
         postMarketChange: ext?.postMarketChange ?? null,
         postMarketChangePercent: ext?.postMarketChangePercent ?? null,
+        _dbg: {
+          ms,
+          regularMarketTime: meta.regularMarketTime ?? 0,
+          ctpRegEnd: ctp.regular?.end ?? 0,
+          ctpRegStart: ctp.regular?.start ?? 0,
+          ctpPostStart: ctp.post?.start ?? 0,
+          ctpPostEnd: ctp.post?.end ?? 0,
+          totalCandles: ts.length,
+          lastTs,
+          lastClose,
+          extRaw: ext,
+        },
       }
     } catch {
       return null
