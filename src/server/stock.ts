@@ -131,18 +131,27 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         postMarketPrice: ext?.postMarketPrice ?? null,
         postMarketChange: ext?.postMarketChange ?? null,
         postMarketChangePercent: ext?.postMarketChangePercent ?? null,
-        _dbg: {
-          ms,
-          regularMarketTime: meta.regularMarketTime ?? 0,
-          ctpRegEnd: ctp.regular?.end ?? 0,
-          ctpRegStart: ctp.regular?.start ?? 0,
-          ctpPostStart: ctp.post?.start ?? 0,
-          ctpPostEnd: ctp.post?.end ?? 0,
-          totalCandles: ts.length,
-          lastTs,
-          lastClose,
-          extRaw: ext,
-        },
+        _dbg: (() => {
+          const boundary = (ctp.regular?.end ?? 0) > 0 ? (ctp.regular?.end ?? 0) : (meta.regularMarketTime ?? 0)
+          const allCandles = ts.map((t: number, i: number) => ({ t, c: closes[i] }))
+          const afterBoundary = allCandles.filter(({t, c}: any) => c != null && c > 0 && t > boundary)
+          const beforeBoundary = allCandles.filter(({t, c}: any) => c != null && c > 0 && t <= boundary)
+          return {
+            ms,
+            regularMarketTime: meta.regularMarketTime ?? 0,
+            ctpRegEnd: ctp.regular?.end ?? 0,
+            boundary,
+            totalCandles: ts.length,
+            afterBoundaryCount: afterBoundary.length,
+            beforeBoundaryCount: beforeBoundary.length,
+            lastRegCandle: beforeBoundary[beforeBoundary.length - 1] ?? null,
+            firstExtCandle: afterBoundary[0] ?? null,
+            lastExtCandle: afterBoundary[afterBoundary.length - 1] ?? null,
+            lastTs,
+            lastClose,
+            extRaw: ext,
+          }
+        })(),
       }
     } catch {
       return null
