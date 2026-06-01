@@ -32,8 +32,23 @@ export type AiVerdict = {
 const GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
 
 async function callGemini(key: string, prompt: string): Promise<string> {
-  const errors: string[] = []
-  for (const model of GEMINI_MODELS) {
+  // First check what models are actually available
+  const listRes = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`,
+    { signal: AbortSignal.timeout(10000) }
+  )
+  if (!listRes.ok) {
+    const txt = await listRes.text()
+    throw new Error(`ListModels HTTP ${listRes.status}: ${txt.slice(0, 300)}`)
+  }
+  const listJson = await listRes.json()
+  const available: string[] = (listJson.models ?? [])
+    .map((m: any) => m.name?.replace('models/', ''))
+    .filter((n: string) => n && (n.includes('gemini') || n.includes('flash')))
+
+  const candidates = [...GEMINI_MODELS, ...available.filter(m => !GEMINI_MODELS.includes(m))]
+
+  for (const model of candidates) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
     const res = await fetch(url, {
       method: 'POST',
@@ -41,10 +56,7 @@ async function callGemini(key: string, prompt: string): Promise<string> {
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
       signal: AbortSignal.timeout(15000),
     })
-    if (res.status === 404) {
-      errors.push(`${model}=404`)
-      continue
-    }
+    if (res.status === 404) continue
     if (!res.ok) {
       const txt = await res.text()
       throw new Error(`${model} HTTP ${res.status}: ${txt.slice(0, 200)}`)
@@ -52,7 +64,7 @@ async function callGemini(key: string, prompt: string): Promise<string> {
     const json = await res.json()
     return json.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
   }
-  throw new Error(`All models 404 [${errors.join(', ')}] — Generative Language API may not be enabled in your Google Cloud project`)
+  throw new Error(`No working model found. Available: [${available.join(', ')}]`)
 }
 
 export const getAiVerdict = createServerFn({ method: 'GET' })
