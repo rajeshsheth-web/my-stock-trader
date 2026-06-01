@@ -29,10 +29,32 @@ export type AiVerdict = {
   detail?: string
 }
 
+const GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+
+async function callGemini(key: string, prompt: string): Promise<string> {
+  for (const model of GEMINI_MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (res.status === 404) continue  // try next model
+    if (!res.ok) {
+      const txt = await res.text()
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 300)}`)
+    }
+    const json = await res.json()
+    return json.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  }
+  throw new Error('No Gemini model available')
+}
+
 export const getAiVerdict = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => StockInput.parse(d))
   .handler(async ({ data: s }): Promise<AiVerdict | null> => {
-    const key = process.env.OPENROUTER_API_KEY || ''
+    const key = process.env.GEMINI_API_KEY || ''
     if (!key) return { error: 'no_key' as const }
 
     try {
@@ -63,30 +85,8 @@ Respond with ONLY valid JSON, no markdown fences:
 
 Base bullets on: price vs open, intraday range, proximity to 52W extremes, and day's momentum. Be direct and specific.`
 
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://mystocktrader.vercel.app',
-          'X-Title': 'MyStockTrader',
-        },
-        body: JSON.stringify({
-          model: 'meta-llama/llama-3.1-8b-instruct:free',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 300,
-        }),
-        signal: AbortSignal.timeout(15000),
-      })
-
-      if (!res.ok) {
-        const txt = await res.text()
-        return { error: 'api_error' as const, detail: `HTTP ${res.status}: ${txt.slice(0, 200)}` }
-      }
-
-      const json = await res.json()
-      const text = json.choices?.[0]?.message?.content?.trim() ?? ''
-      const parsed = JSON.parse(text.replace(/^```json\n?|\n?```$/g, ''))
+      const text = await callGemini(key, prompt)
+      const parsed = JSON.parse(text.trim().replace(/^```json\n?|\n?```$/g, ''))
 
       return {
         rating: parsed.rating,
