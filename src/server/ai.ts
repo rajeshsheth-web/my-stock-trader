@@ -72,7 +72,7 @@ Base bullets on: price vs open, intraday range, proximity to 52W extremes, and d
           'X-Title': 'MyStockTrader',
         },
         body: JSON.stringify({
-          model: 'google/gemini-2.0-flash-001',
+          model: 'meta-llama/llama-3.1-8b-instruct:free',
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 300,
         }),
