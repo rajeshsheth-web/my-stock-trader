@@ -27,6 +27,7 @@ export type AiVerdict = {
   error?: never
 } | {
   error: 'no_key' | 'api_error'
+  detail?: string
 }
 
 export const getAiVerdict = createServerFn({ method: 'GET' })
@@ -37,7 +38,7 @@ export const getAiVerdict = createServerFn({ method: 'GET' })
 
     try {
       const genAI = new GoogleGenerativeAI(key)
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
 
       const pctFrom52High = s.fiftyTwoWeekHigh > 0
         ? ((s.price - s.fiftyTwoWeekHigh) / s.fiftyTwoWeekHigh) * 100
@@ -78,7 +79,7 @@ Base bullets on: price vs open, intraday range, proximity to 52W extremes, and d
         bullets: parsed.bullets,
         disclaimer: 'AI analysis is for informational purposes only, not financial advice.',
       }
-    } catch {
-      return { error: 'api_error' as const }
+    } catch (e: any) {
+      return { error: 'api_error' as const, detail: String(e?.message ?? e) }
     }
   })

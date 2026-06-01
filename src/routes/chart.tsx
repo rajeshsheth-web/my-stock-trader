@@ -353,9 +353,16 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
       )}
 
       {!loading && verdict && 'error' in verdict && verdict.error === 'api_error' && (
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          AI analysis failed — check your API key is valid and has available credits.
-        </p>
+        <div className="space-y-1">
+          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+            AI analysis failed — check your API key is valid and has available credits.
+          </p>
+          {(verdict as any).detail && (
+            <p className="text-xs font-mono break-all" style={{ color: 'var(--color-muted)' }}>
+              {(verdict as any).detail}
+            </p>
+          )}
+        </div>
       )}
 
       {!loading && hasVerdict && (() => {
