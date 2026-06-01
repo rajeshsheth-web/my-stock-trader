@@ -68,6 +68,23 @@ function TickerSearch() {
   )
 }
 
+function MarketStateBadge({ state }: { state: string }) {
+  const cfg: Record<string, { label: string; bg: string; color: string }> = {
+    REGULAR:  { label: 'Market Open',   bg: 'rgba(0,135,60,0.12)',   color: '#00873c' },
+    PRE:      { label: 'Pre-Market',    bg: 'rgba(217,119,6,0.12)',  color: '#d97706' },
+    PREPRE:   { label: 'Pre-Market',    bg: 'rgba(217,119,6,0.12)',  color: '#d97706' },
+    POST:     { label: 'After Hours',   bg: 'rgba(217,119,6,0.12)',  color: '#d97706' },
+    POSTPOST: { label: 'After Hours',   bg: 'rgba(217,119,6,0.12)',  color: '#d97706' },
+    CLOSED:   { label: 'Market Closed', bg: 'rgba(107,114,128,0.12)', color: '#6b7280' },
+  }
+  const c = cfg[state] ?? cfg.CLOSED
+  return (
+    <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ background: c.bg, color: c.color, border: `1px solid ${c.color}33` }}>
+      {c.label}
+    </span>
+  )
+}
+
 function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.useLoaderData>['stock']> }) {
   const navigate = useNavigate()
   const { tab } = Route.useSearch()
@@ -171,6 +188,7 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
               {stock.symbol}
             </span>
             <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{stock.exchangeName}</span>
+            <MarketStateBadge state={marketState} />
           </div>
           <div className="mt-1 flex items-baseline gap-3 flex-wrap">
             <span className={`text-3xl font-bold tabular-nums ${priceClass}`}>
