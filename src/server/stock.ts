@@ -1,8 +1,21 @@
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
-import yahooFinance from 'yahoo-finance2'
 
 const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
+
+const YF_BASE = 'https://query1.finance.yahoo.com'
+
+async function yfFetch(url: string) {
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      'Accept': 'application/json',
+    },
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!r.ok) throw new Error(`YF HTTP ${r.status}`)
+  return r.json()
+}
 
 // ─── getStockOverview ─────────────────────────────────────────────────────────
 
@@ -10,43 +23,43 @@ export const getStockOverview = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const [quote, summary] = await Promise.allSettled([
-        yahooFinance.quote(symbol),
-        yahooFinance.quoteSummary(symbol, { modules: ['summaryDetail', 'price'] }),
-      ])
+      const json = await yfFetch(
+        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=true`
+      )
+      const meta = json?.chart?.result?.[0]?.meta
+      if (!meta || !meta.regularMarketPrice) return null
 
-      if (quote.status === 'rejected') return null
-      const q = quote.value
-      if (!q || !q.regularMarketPrice) return null
+      const price: number = meta.regularMarketPrice
+      const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
+      const change = price - prevClose
+      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
 
-      const price = q.regularMarketPrice ?? 0
-      const sd = summary.status === 'fulfilled' ? summary.value?.summaryDetail : null
+      const ms: string = meta.marketState ?? 'CLOSED'
 
       return {
         symbol,
-        shortName: q.shortName ?? q.longName ?? symbol,
+        shortName: meta.shortName ?? meta.longName ?? symbol,
         regularMarketPrice: price,
-        regularMarketChange: q.regularMarketChange ?? 0,
-        regularMarketChangePercent: q.regularMarketChangePercent ?? 0,
-        regularMarketVolume: q.regularMarketVolume ?? 0,
-        regularMarketOpen: q.regularMarketOpen ?? 0,
-        regularMarketDayHigh: q.regularMarketDayHigh ?? 0,
-        regularMarketDayLow: q.regularMarketDayLow ?? 0,
-        fiftyTwoWeekHigh: q.fiftyTwoWeekHigh ?? 0,
-        fiftyTwoWeekLow: q.fiftyTwoWeekLow ?? 0,
-        marketCap: q.marketCap ?? 0,
-        currency: q.currency ?? 'USD',
-        exchangeName: q.fullExchangeName ?? q.exchange ?? '',
-        previousClose: q.regularMarketPreviousClose ?? 0,
-        isMarketOpen: q.marketState === 'REGULAR',
-        // Extended-hours fields
-        preMarketPrice: q.preMarketPrice ?? null,
-        preMarketChange: q.preMarketChange ?? null,
-        preMarketChangePercent: q.preMarketChangePercent ?? null,
-        postMarketPrice: q.postMarketPrice ?? null,
-        postMarketChange: q.postMarketChange ?? null,
-        postMarketChangePercent: q.postMarketChangePercent ?? null,
-        marketState: q.marketState ?? 'CLOSED',
+        regularMarketChange: change,
+        regularMarketChangePercent: changePct,
+        regularMarketVolume: meta.regularMarketVolume ?? 0,
+        regularMarketOpen: meta.regularMarketOpen ?? 0,
+        regularMarketDayHigh: meta.regularMarketDayHigh ?? 0,
+        regularMarketDayLow: meta.regularMarketDayLow ?? 0,
+        fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? 0,
+        fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? 0,
+        marketCap: 0,
+        currency: meta.currency ?? 'USD',
+        exchangeName: meta.fullExchangeName ?? meta.exchangeName ?? '',
+        previousClose: prevClose,
+        isMarketOpen: ms === 'REGULAR',
+        marketState: ms,
+        preMarketPrice: meta.preMarketPrice ?? null,
+        preMarketChange: meta.preMarketChange ?? null,
+        preMarketChangePercent: meta.preMarketChangePercent ?? null,
+        postMarketPrice: meta.postMarketPrice ?? null,
+        postMarketChange: meta.postMarketChange ?? null,
+        postMarketChangePercent: meta.postMarketChangePercent ?? null,
       }
     } catch {
       return null
@@ -59,28 +72,34 @@ export const getStockQuote = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const q = await yahooFinance.quote(symbol)
-      if (!q || !q.regularMarketPrice) return null
-      const price = q.regularMarketPrice ?? 0
-      const prevClose = q.regularMarketPreviousClose ?? 0
-      const change = q.regularMarketChange ?? price - prevClose
-      const changePct = q.regularMarketChangePercent ?? 0
+      const json = await yfFetch(
+        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=true`
+      )
+      const meta = json?.chart?.result?.[0]?.meta
+      if (!meta || !meta.regularMarketPrice) return null
+
+      const price: number = meta.regularMarketPrice
+      const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price
+      const change = price - prevClose
+      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
+      const ms: string = meta.marketState ?? 'CLOSED'
+
       return {
         price,
         change,
         changePct,
-        high: q.regularMarketDayHigh ?? 0,
-        low: q.regularMarketDayLow ?? 0,
-        open: q.regularMarketOpen ?? 0,
+        high: meta.regularMarketDayHigh ?? 0,
+        low: meta.regularMarketDayLow ?? 0,
+        open: meta.regularMarketOpen ?? 0,
         prevClose,
-        timestamp: q.regularMarketTime ? Math.floor(new Date(q.regularMarketTime).getTime() / 1000) : Math.floor(Date.now() / 1000),
-        marketState: q.marketState ?? 'CLOSED',
-        preMarketPrice: q.preMarketPrice ?? null,
-        preMarketChange: q.preMarketChange ?? null,
-        preMarketChangePercent: q.preMarketChangePercent ?? null,
-        postMarketPrice: q.postMarketPrice ?? null,
-        postMarketChange: q.postMarketChange ?? null,
-        postMarketChangePercent: q.postMarketChangePercent ?? null,
+        timestamp: meta.regularMarketTime ?? Math.floor(Date.now() / 1000),
+        marketState: ms,
+        preMarketPrice: meta.preMarketPrice ?? null,
+        preMarketChange: meta.preMarketChange ?? null,
+        preMarketChangePercent: meta.preMarketChangePercent ?? null,
+        postMarketPrice: meta.postMarketPrice ?? null,
+        postMarketChange: meta.postMarketChange ?? null,
+        postMarketChangePercent: meta.postMarketChangePercent ?? null,
       }
     } catch {
       return null
@@ -99,27 +118,24 @@ export const getRangeCandles = createServerFn({ method: 'GET' })
   )
   .handler(async ({ data: { symbol, range, interval } }) => {
     try {
-      const validInterval = interval as '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '90m' | '1h' | '1d' | '5d' | '1wk' | '1mo' | '3mo'
-      const validRange = range as '1d' | '5d' | '1mo' | '3mo' | '6mo' | '1y' | '2y' | '5y' | '10y' | 'ytd' | 'max'
+      const json = await yfFetch(
+        `${YF_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=true`
+      )
+      const result = json?.chart?.result?.[0]
+      if (!result) return []
+      const ts: number[] = result.timestamp ?? []
+      const ohlcv = result.indicators?.quote?.[0] ?? {}
 
-      const result = await yahooFinance.chart(symbol, {
-        interval: validInterval,
-        range: validRange,
-        includePrePost: true,
-      })
-
-      if (!result?.quotes?.length) return []
-
-      return result.quotes
-        .filter(c => c.close != null && c.close > 0)
-        .map(c => ({
-          time: Math.floor(new Date(c.date).getTime() / 1000),
-          open: c.open ?? 0,
-          high: c.high ?? 0,
-          low: c.low ?? 0,
-          close: c.close ?? 0,
-          volume: c.volume ?? 0,
+      return ts
+        .map((t: number, i: number) => ({
+          time: t,
+          open: ohlcv.open?.[i] ?? 0,
+          high: ohlcv.high?.[i] ?? 0,
+          low: ohlcv.low?.[i] ?? 0,
+          close: ohlcv.close?.[i] ?? 0,
+          volume: ohlcv.volume?.[i] ?? 0,
         }))
+        .filter((c: { close: number }) => c.close != null && c.close > 0)
     } catch {
       return []
     }

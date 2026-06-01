@@ -1,5 +1,25 @@
 import { createServerFn } from '@tanstack/react-start'
-import yahooFinance from 'yahoo-finance2'
+
+const YF_BASE = 'https://query1.finance.yahoo.com'
+
+async function yfFetch(url: string) {
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      'Accept': 'application/json',
+    },
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!r.ok) throw new Error(`YF HTTP ${r.status}`)
+  return r.json()
+}
+
+async function fetchScreener(scrId: string, count = 25): Promise<any[]> {
+  const json = await yfFetch(
+    `${YF_BASE}/v1/finance/screener/predefined/saved?formatted=false&scrIds=${scrId}&count=${count}`
+  )
+  return json?.finance?.result?.[0]?.quotes ?? []
+}
 
 export const getTopMovers = createServerFn({ method: 'GET' })
   .inputValidator((cat: unknown) => {
@@ -14,8 +34,7 @@ export const getTopMovers = createServerFn({ method: 'GET' })
         losers: 'day_losers',
         active: 'most_actives',
       }
-      const result = await yahooFinance.screener({ scrIds: scrIds[category], count: 20 })
-      const quotes = result?.quotes ?? []
+      const quotes = await fetchScreener(scrIds[category], 20)
       return quotes.map((q: any) => ({
         symbol: q.symbol,
         shortName: q.shortName ?? q.symbol,
@@ -51,16 +70,15 @@ export type DayTradeRec = {
 export const getDayTradeRecs = createServerFn({ method: 'GET' })
   .handler(async () => {
     try {
-      const [gainersRes, activeRes] = await Promise.allSettled([
-        yahooFinance.screener({ scrIds: 'day_gainers', count: 25 }),
-        yahooFinance.screener({ scrIds: 'most_actives', count: 25 }),
+      const [gainers, active] = await Promise.allSettled([
+        fetchScreener('day_gainers', 25),
+        fetchScreener('most_actives', 25),
       ])
 
       const raw: any[] = []
-      for (const res of [gainersRes, activeRes]) {
+      for (const res of [gainers, active]) {
         if (res.status === 'fulfilled') {
-          const quotes: any[] = res.value?.quotes ?? []
-          for (const q of quotes) {
+          for (const q of res.value) {
             if (!raw.find((r) => r.symbol === q.symbol)) raw.push(q)
           }
         }
@@ -74,13 +92,10 @@ export const getDayTradeRecs = createServerFn({ method: 'GET' })
         const high: number = q.regularMarketDayHigh ?? 0
         const low: number = q.regularMarketDayLow ?? 0
         const range = low > 0 ? ((high - low) / low) * 100 : 0
-
         return (
-          price >= 5 &&
-          price <= 2000 &&
+          price >= 5 && price <= 2000 &&
           volume >= 500_000 &&
-          pct >= 1 &&
-          pct <= 15 &&
+          pct >= 1 && pct <= 15 &&
           range >= 1 &&
           (avgVolume === 0 || volume / avgVolume >= 1.2)
         )
@@ -97,17 +112,12 @@ export const getDayTradeRecs = createServerFn({ method: 'GET' })
 
         const volumeSurge = avgVolume > 0 ? volume / avgVolume : 1
         const intradayRange = low > 0 ? ((high - low) / low) * 100 : 0
-
         const signals: string[] = []
 
         const volScore = Math.min(35, (volumeSurge - 1) * 10)
         if (volumeSurge >= 1.5) signals.push(`${volumeSurge.toFixed(1)}× avg volume`)
 
-        const momScore = pct >= 2 && pct <= 8
-          ? 30
-          : pct > 8
-          ? Math.max(0, 30 - (pct - 8) * 3)
-          : pct * 10
+        const momScore = pct >= 2 && pct <= 8 ? 30 : pct > 8 ? Math.max(0, 30 - (pct - 8) * 3) : pct * 10
         if (pct >= 2) signals.push(`+${pct.toFixed(1)}% day gain`)
 
         const aboveOpen = price > open
@@ -118,7 +128,6 @@ export const getDayTradeRecs = createServerFn({ method: 'GET' })
         if (intradayRange >= 3) signals.push(`${intradayRange.toFixed(1)}% intraday range`)
 
         const score = Math.round(volScore + momScore + openScore + rangeScore)
-
         const entry = price
         const targetPct = 0.02 + (score / 100) * 0.03
         const target = parseFloat((entry * (1 + targetPct)).toFixed(2))
@@ -127,17 +136,8 @@ export const getDayTradeRecs = createServerFn({ method: 'GET' })
         return {
           symbol: q.symbol,
           shortName: q.shortName ?? q.symbol,
-          price,
-          changePercent: pct,
-          volume,
-          avgVolume,
-          volumeSurge,
-          intradayRange,
-          entry,
-          target,
-          stop,
-          score,
-          signals,
+          price, changePercent: pct, volume, avgVolume,
+          volumeSurge, intradayRange, entry, target, stop, score, signals,
         }
       })
 

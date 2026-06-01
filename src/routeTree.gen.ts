@@ -10,8 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PortfolioRouteImport } from './routes/portfolio'
-import { Route as MoversRouteImport } from './routes/movers'
 import { Route as ChatRouteImport } from './routes/chat'
+import { Route as ChartRouteImport } from './routes/chart'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -20,14 +20,14 @@ const PortfolioRoute = PortfolioRouteImport.update({
   path: '/portfolio',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MoversRoute = MoversRouteImport.update({
-  id: '/movers',
-  path: '/movers',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/chat',
   path: '/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChartRoute = ChartRouteImport.update({
+  id: '/chart',
+  path: '/chart',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -44,38 +44,38 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/chart': typeof ChartRoute
   '/chat': typeof ChatRoute
-  '/movers': typeof MoversRoute
   '/portfolio': typeof PortfolioRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/chart': typeof ChartRoute
   '/chat': typeof ChatRoute
-  '/movers': typeof MoversRoute
   '/portfolio': typeof PortfolioRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/chart': typeof ChartRoute
   '/chat': typeof ChatRoute
-  '/movers': typeof MoversRoute
   '/portfolio': typeof PortfolioRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/chat' | '/movers' | '/portfolio'
+  fullPaths: '/' | '/auth' | '/chart' | '/chat' | '/portfolio'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/chat' | '/movers' | '/portfolio'
-  id: '__root__' | '/' | '/auth' | '/chat' | '/movers' | '/portfolio'
+  to: '/' | '/auth' | '/chart' | '/chat' | '/portfolio'
+  id: '__root__' | '/' | '/auth' | '/chart' | '/chat' | '/portfolio'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
+  ChartRoute: typeof ChartRoute
   ChatRoute: typeof ChatRoute
-  MoversRoute: typeof MoversRoute
   PortfolioRoute: typeof PortfolioRoute
 }
 
@@ -88,18 +88,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PortfolioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/movers': {
-      id: '/movers'
-      path: '/movers'
-      fullPath: '/movers'
-      preLoaderRoute: typeof MoversRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/chat': {
       id: '/chat'
       path: '/chat'
       fullPath: '/chat'
       preLoaderRoute: typeof ChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chart': {
+      id: '/chart'
+      path: '/chart'
+      fullPath: '/chart'
+      preLoaderRoute: typeof ChartRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth': {
@@ -122,8 +122,8 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
+  ChartRoute: ChartRoute,
   ChatRoute: ChatRoute,
-  MoversRoute: MoversRoute,
   PortfolioRoute: PortfolioRoute,
 }
 export const routeTree = rootRouteImport
