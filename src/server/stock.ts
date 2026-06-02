@@ -66,66 +66,28 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
   return json?.chart?.result?.[0] ?? null
 }
 
-function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]) {
-  const ms: string = meta?.marketState ?? 'REGULAR'
-  if (ms === 'REGULAR') return null
-
-  const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
-
-  // Prefer direct meta fields Yahoo provides during active extended sessions
-  if (isPreMarket && meta?.preMarketPrice != null && meta.preMarketPrice > 0) {
-    const p: number = meta.preMarketPrice
-    const ch: number = meta.preMarketChange ?? (p - (meta.chartPreviousClose ?? meta.regularMarketPrice ?? p))
-    const pct: number = meta.preMarketChangePercent ?? (meta.regularMarketPrice > 0 ? (ch / meta.regularMarketPrice) * 100 : 0)
-    return { preMarketPrice: p, preMarketChange: ch, preMarketChangePercent: pct, postMarketPrice: null, postMarketChange: null, postMarketChangePercent: null }
-  }
-  if (!isPreMarket && meta?.postMarketPrice != null && meta.postMarketPrice > 0) {
-    const p: number = meta.postMarketPrice
-    const ref: number = meta.chartPreviousClose ?? meta.regularMarketPrice ?? p
-    const ch: number = meta.postMarketChange ?? (p - ref)
-    const pct: number = meta.postMarketChangePercent ?? (ref > 0 ? (ch / ref) * 100 : 0)
-    return { preMarketPrice: null, preMarketChange: null, preMarketChangePercent: null, postMarketPrice: p, postMarketChange: ch, postMarketChangePercent: pct }
-  }
-
-  // Fall back to computing from candles (covers CLOSED state with recent AH data)
-  if (!ts.length) return null
-
-  // Last valid candle = extended-hours price
-  let extPrice: number | null = null
-  for (let i = closes.length - 1; i >= 0; i--) {
-    const c = closes[i]
-    if (c != null && (c as number) > 0) { extPrice = c as number; break }
-  }
-  if (extPrice == null) return null
-
-  // Find last regular-session close using session end boundary
-  const boundary: number =
-    (meta?.currentTradingPeriod?.regular?.end ?? 0) ||
-    (meta?.regularMarketTime ?? 0)
-  let regularClose: number = meta?.chartPreviousClose ?? meta?.regularMarketPrice ?? extPrice
-  if (boundary > 0) {
-    for (let i = ts.length - 1; i >= 0; i--) {
-      const c = closes[i]
-      if (c != null && (c as number) > 0 && ts[i] <= boundary) {
-        regularClose = c as number
-        break
-      }
+// Extended hours pricing from v7/finance/quote (works in all market states incl CLOSED/overnight)
+async function fetchExtendedHours(symbol: string) {
+  try {
+    const url = `${YF1}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}&fields=marketState,preMarketPrice,preMarketChange,preMarketChangePercent,postMarketPrice,postMarketChange,postMarketChangePercent`
+    const json = await yfFetch(url)
+    const q = json?.quoteResponse?.result?.[0]
+    if (!q) return null
+    const ms: string = q.marketState ?? 'CLOSED'
+    const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
+    const isPre = isPreMarket && q.preMarketPrice != null && q.preMarketPrice > 0
+    const isPost = !isPreMarket && ms !== 'REGULAR' && q.postMarketPrice != null && q.postMarketPrice > 0
+    if (!isPre && !isPost) return null
+    return {
+      preMarketPrice: isPre ? (q.preMarketPrice as number) : null,
+      preMarketChange: isPre ? (q.preMarketChange as number ?? null) : null,
+      preMarketChangePercent: isPre ? (q.preMarketChangePercent as number ?? null) : null,
+      postMarketPrice: isPost ? (q.postMarketPrice as number) : null,
+      postMarketChange: isPost ? (q.postMarketChange as number ?? null) : null,
+      postMarketChangePercent: isPost ? (q.postMarketChangePercent as number ?? null) : null,
     }
-  }
-
-  // Only return if price actually differs from regular close (skip zero-change case)
-  if (Math.abs(extPrice - regularClose) < 0.001) return null
-
-  const extChange = extPrice - regularClose
-  const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
-
-  return {
-    preMarketPrice: isPreMarket ? extPrice : null,
-    preMarketChange: isPreMarket ? extChange : null,
-    preMarketChangePercent: isPreMarket ? extChangePct : null,
-    postMarketPrice: !isPreMarket ? extPrice : null,
-    postMarketChange: !isPreMarket ? extChange : null,
-    postMarketChangePercent: !isPreMarket ? extChangePct : null,
+  } catch {
+    return null
   }
 }
 
@@ -135,7 +97,10 @@ export const getStockOverview = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const result = await fetchChart(symbol, '5d', '15m')
+      const [result, ext] = await Promise.all([
+        fetchChart(symbol, '5d', '15m'),
+        fetchExtendedHours(symbol),
+      ])
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
@@ -145,9 +110,6 @@ export const getStockOverview = createServerFn({ method: 'GET' })
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
-      const ts: number[] = result.timestamp ?? []
-      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? []
-      const ext = extractExtendedHours(meta, ts, closes)
 
       return {
         symbol,
@@ -185,7 +147,10 @@ export const getStockQuote = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const result = await fetchChart(symbol, '5d', '15m')
+      const [result, ext] = await Promise.all([
+        fetchChart(symbol, '5d', '15m'),
+        fetchExtendedHours(symbol),
+      ])
       if (!result) return null
       const meta = result.meta
       if (!meta?.regularMarketPrice) return null
@@ -195,9 +160,6 @@ export const getStockQuote = createServerFn({ method: 'GET' })
       const change = price - prevClose
       const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0
       const ms: string = meta.marketState ?? 'CLOSED'
-      const ts: number[] = result.timestamp ?? []
-      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? []
-      const ext = extractExtendedHours(meta, ts, closes)
 
       return {
         price,

@@ -28,10 +28,8 @@ const COLORS = {
 }
 
 const SESSION_DEFS = [
-  { hh: 4,  mm: 0,  label: 'Pre',   color: 'rgba(217,119,6,0.65)',  dash: true  },
-  { hh: 9,  mm: 30, label: 'Open',  color: 'rgba(0,135,60,0.85)',   dash: false },
-  { hh: 16, mm: 0,  label: 'Close', color: 'rgba(235,15,41,0.85)',  dash: false },
-  { hh: 20, mm: 0,  label: 'AH',    color: 'rgba(217,119,6,0.65)',  dash: true  },
+  { hh: 9,  mm: 30, label: 'Open',  color: 'rgba(0,135,60,0.75)',   dash: false },
+  { hh: 16, mm: 0,  label: 'Close', color: 'rgba(235,15,41,0.75)',  dash: false },
 ]
 
 type RangeKey = '1D' | '5D' | '1M' | '6M' | 'YTD' | '1Y' | '5Y' | 'Max'
