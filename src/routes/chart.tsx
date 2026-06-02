@@ -100,10 +100,11 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
   const isPostMarket = (s: string) => s === 'POST' || s === 'POSTPOST'
 
   function extInfo(q: typeof stock) {
+    if (q.marketState === 'REGULAR') return null
     if (isPreMarket(q.marketState) && q.preMarketPrice != null)
       return { price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' }
-    if ((isPostMarket(q.marketState) || q.marketState === 'CLOSED') && q.postMarketPrice != null)
-      return { price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' }
+    if (q.postMarketPrice != null)
+      return { price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: isPostMarket(q.marketState) ? 'After Hours' : 'Closed' }
     return null
   }
 
@@ -120,12 +121,13 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
         setLivePct(q.changePct)
         setMarketState(q.marketState)
         const ms = q.marketState
-        if ((ms === 'PRE' || ms === 'PREPRE') && q.preMarketPrice != null)
-          setExtData({ price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' })
-        else if ((ms === 'POST' || ms === 'POSTPOST' || ms === 'CLOSED') && q.postMarketPrice != null)
-          setExtData({ price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' })
-        else
+        if (ms === 'REGULAR') {
           setExtData(null)
+        } else if ((ms === 'PRE' || ms === 'PREPRE') && q.preMarketPrice != null) {
+          setExtData({ price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' })
+        } else if (q.postMarketPrice != null) {
+          setExtData({ price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: (ms === 'POST' || ms === 'POSTPOST') ? 'After Hours' : 'Closed' })
+        }
       } catch {}
     }, 10_000)
     return () => clearInterval(id)

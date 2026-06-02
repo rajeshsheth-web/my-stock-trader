@@ -27,32 +27,33 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
 function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]) {
   const ms: string = meta?.marketState ?? 'REGULAR'
   if (ms === 'REGULAR') return null
-
   if (!ts.length) return null
 
   const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
-  const ctp = meta?.currentTradingPeriod ?? {}
-  const regularEnd: number = ctp.regular?.end ?? 0
-  const regularStart: number = ctp.regular?.start ?? 0
-  const regularMarketTime: number = meta?.regularMarketTime ?? 0
 
-  const boundary = isPreMarket
-    ? (regularStart > 0 ? regularStart : 0)
-    : (regularEnd > 0 ? regularEnd : regularMarketTime)
-
-  if (boundary === 0) return null
-
-  const pairs = ts.map((t, i) => ({ t, c: closes[i] }))
-  const regCandles = pairs.filter(({ t, c }) => c != null && (c as number) > 0 && t <= boundary)
-  const extCandles = pairs.filter(({ t, c }) => c != null && (c as number) > 0 && (isPreMarket ? t < boundary : t > boundary))
-
-  const extPrice = extCandles.length ? extCandles[extCandles.length - 1].c as number : null
+  // Last valid candle close = current extended-hours price
+  let extPrice: number | null = null
+  for (let i = closes.length - 1; i >= 0; i--) {
+    const c = closes[i]
+    if (c != null && (c as number) > 0) { extPrice = c as number; break }
+  }
   if (extPrice == null) return null
 
-  // Use last regular-session candle as reference — meta.regularMarketPrice may
-  // already reflect after-hours on Yahoo Finance.
-  const regularClose = regCandles.length ? regCandles[regCandles.length - 1].c as number : null
-  if (regularClose == null) return null
+  // Last regular-session candle as change reference.
+  // Use regularMarketTime as the session boundary since it's the most reliable field.
+  const boundary: number =
+    (meta?.currentTradingPeriod?.regular?.end ?? 0) ||
+    (meta?.regularMarketTime ?? 0)
+  let regularClose: number = meta?.regularMarketPrice ?? extPrice
+  if (boundary > 0) {
+    for (let i = ts.length - 1; i >= 0; i--) {
+      const c = closes[i]
+      if (c != null && (c as number) > 0 && ts[i] <= boundary) {
+        regularClose = c as number
+        break
+      }
+    }
+  }
 
   const extChange = extPrice - regularClose
   const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
