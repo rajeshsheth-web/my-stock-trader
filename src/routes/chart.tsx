@@ -626,6 +626,7 @@ function timeAgo(ts: number) {
 function NewsTab({ symbol }: { symbol: string }) {
   const [news, setNews] = useState<Awaited<ReturnType<typeof getStockNews>>>([])
   const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState<(typeof news)[0] | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -650,24 +651,66 @@ function NewsTab({ symbol }: { symbol: string }) {
   }
 
   return (
-    <div className="card divide-y" style={{ borderColor: 'var(--color-border)' }}>
-      {news.map(item => (
-        <div key={item.uuid} className="py-4 first:pt-0 last:pb-0">
-          <a
-            href={item.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium hover:underline"
-            style={{ color: 'var(--color-fg)' }}
+    <>
+      <div className="card divide-y" style={{ borderColor: 'var(--color-border)' }}>
+        {news.map(item => (
+          <button
+            key={item.uuid}
+            onClick={() => setSelected(item)}
+            className="w-full text-left py-4 first:pt-0 last:pb-0 hover:bg-[var(--color-surface)] -mx-4 px-4 transition-colors"
           >
-            {item.title}
-          </a>
-          <p className="mt-1 text-xs" style={{ color: 'var(--color-muted)' }}>
-            {item.publisher} · {timeAgo(item.providerPublishTime)}
-          </p>
+            {(item as any).thumbnail && (
+              <img src={(item as any).thumbnail} alt="" className="w-full h-32 object-cover rounded-lg mb-2" />
+            )}
+            <p className="text-sm font-medium" style={{ color: 'var(--color-fg)' }}>{item.title}</p>
+            <p className="mt-1 text-xs" style={{ color: 'var(--color-muted)' }}>
+              {item.publisher} · {timeAgo(item.providerPublishTime)}
+            </p>
+          </button>
+        ))}
+      </div>
+
+      {/* In-app article modal */}
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setSelected(null)}
+        >
+          <div
+            className="w-full sm:max-w-xl max-h-[90dvh] overflow-y-auto rounded-t-2xl sm:rounded-2xl shadow-xl"
+            style={{ background: 'var(--color-bg)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            {(selected as any).thumbnail && (
+              <img src={(selected as any).thumbnail} alt="" className="w-full h-48 object-cover rounded-t-2xl sm:rounded-t-2xl" />
+            )}
+            <div className="p-5 space-y-3">
+              <h2 className="text-base font-bold leading-snug" style={{ color: 'var(--color-fg)' }}>{selected.title}</h2>
+              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                {selected.publisher} · {timeAgo(selected.providerPublishTime)}
+              </p>
+              <div className="flex gap-3 pt-2">
+                <a
+                  href={selected.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-primary text-sm flex-1 text-center"
+                >
+                  Read Full Article ↗
+                </a>
+                <button
+                  onClick={() => setSelected(null)}
+                  className="btn-ghost text-sm px-4"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      ))}
-    </div>
+      )}
+    </>
   )
 }
 

@@ -3,16 +3,59 @@ import { z } from 'zod'
 
 const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
 const YF1 = 'https://query1.finance.yahoo.com'
+const YF2 = 'https://query2.finance.yahoo.com'
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 async function yfFetch(url: string) {
   const r = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Accept': 'application/json',
-    },
+    headers: { 'User-Agent': UA, 'Accept': 'application/json' },
     signal: AbortSignal.timeout(5000),
   })
   if (!r.ok) throw new Error(`YF HTTP ${r.status}`)
+  return r.json()
+}
+
+// Yahoo Finance v10 requires a crumb+cookie pair obtained via a handshake.
+// Cache in module scope — stays warm between Vercel invocations.
+let _crumbCache: { crumb: string; cookie: string; expiresAt: number } | null = null
+
+async function getYahooCrumb() {
+  if (_crumbCache && _crumbCache.expiresAt > Date.now()) return _crumbCache
+
+  // Step 1: hit the consent page to get a session cookie
+  const consentRes = await fetch('https://fc.yahoo.com', {
+    headers: { 'User-Agent': UA, 'Accept': '*/*' },
+    signal: AbortSignal.timeout(8000),
+    redirect: 'follow',
+  })
+  // Collect all Set-Cookie values
+  const rawCookies: string[] = []
+  consentRes.headers.forEach((val, key) => {
+    if (key.toLowerCase() === 'set-cookie') rawCookies.push(val.split(';')[0])
+  })
+  const cookieStr = rawCookies.join('; ')
+
+  // Step 2: exchange the cookie for a crumb
+  const crumbRes = await fetch(`${YF2}/v1/test/getcrumb`, {
+    headers: { 'User-Agent': UA, 'Cookie': cookieStr, 'Accept': 'text/plain' },
+    signal: AbortSignal.timeout(6000),
+  })
+  const crumb = (await crumbRes.text()).trim()
+  if (!crumb || crumb.length > 40 || crumb.startsWith('<'))
+    throw new Error('Bad crumb: ' + crumb.slice(0, 60))
+
+  _crumbCache = { crumb, cookie: cookieStr, expiresAt: Date.now() + 55 * 60_000 }
+  return _crumbCache
+}
+
+async function yfFetchAuthed(path: string) {
+  const { crumb, cookie } = await getYahooCrumb()
+  const sep = path.includes('?') ? '&' : '?'
+  const r = await fetch(`${YF2}${path}${sep}crumb=${encodeURIComponent(crumb)}`, {
+    headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Cookie': cookie },
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!r.ok) throw new Error(`YF authed HTTP ${r.status}`)
   return r.json()
 }
 
@@ -100,7 +143,7 @@ export const getStockOverview = createServerFn({ method: 'GET' })
         regularMarketDayLow: meta.regularMarketDayLow ?? 0,
         fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? 0,
         fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? 0,
-        marketCap: 0,
+        marketCap: meta.marketCap ?? 0,
         currency: meta.currency ?? 'USD',
         exchangeName: meta.fullExchangeName ?? meta.exchangeName ?? '',
         previousClose: prevClose,
@@ -166,8 +209,8 @@ export const getStockStats = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const url = `${YF1}/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,financialData,institutionOwnership`
-      const json = await yfFetch(url)
+      const path = `/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,financialData,institutionOwnership&formatted=false`
+      const json = await yfFetchAuthed(path)
       const r = json?.quoteSummary?.result?.[0]
       if (!r) return null
       const sd = r.summaryDetail ?? {}
@@ -237,6 +280,7 @@ export const getStockNews = createServerFn({ method: 'GET' })
           link: n.link ?? '',
           providerPublishTime: n.providerPublishTime ?? 0,
           uuid: n.uuid,
+          thumbnail: (n.thumbnail?.resolutions ?? []).sort((a: any, b: any) => (b.width ?? 0) - (a.width ?? 0))[0]?.url ?? null,
         }))
     } catch {
       return []
