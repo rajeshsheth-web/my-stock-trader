@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect } from "react";
+import { getAiChat } from "@/server/ai";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -8,11 +9,8 @@ interface Message {
   content: string;
 }
 
-const ASSISTANT_PLACEHOLDER =
-  "AI analyst coming in M6. Ask me anything about stocks!";
-
 const SYSTEM_MESSAGE =
-  "Bloomberg Desk AI — real-time equity research, earnings analysis, macro commentary, and portfolio risk assessment. Powered by MyStockTrader Intelligence.";
+  "Bloomberg Desk AI — real-time equity research, earnings analysis, macro commentary, and portfolio risk assessment.";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -35,7 +33,7 @@ function MessageBubble({ msg }: { msg: Message }) {
         </div>
       )}
       <div
-        className="max-w-[75%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed"
+        className="max-w-[75%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"
         style={
           isUser
             ? {
@@ -65,13 +63,14 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
-function EmptyState() {
-  const suggestions = [
-    "What's the outlook for AAPL?",
-    "Compare NVDA vs AMD",
-    "Explain P/E ratio",
-    "Best sectors for 2025?",
-  ];
+const SUGGESTIONS = [
+  "What's the outlook for AAPL this week?",
+  "Compare NVDA vs AMD",
+  "Explain P/E ratio simply",
+  "Best sectors for 2025?",
+];
+
+function EmptyState({ onSuggestion }: { onSuggestion: (s: string) => void }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-6 py-12 text-center">
       <div
@@ -89,19 +88,17 @@ function EmptyState() {
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 w-full max-w-sm">
-        {suggestions.map((s) => (
-          <div
+        {SUGGESTIONS.map((s) => (
+          <button
             key={s}
-            className="card text-xs text-left cursor-default"
+            onClick={() => onSuggestion(s)}
+            className="card text-xs text-left hover:bg-[var(--color-surface)] transition-colors"
             style={{ color: "var(--color-muted)" }}
           >
             "{s}"
-          </div>
+          </button>
         ))}
       </div>
-      <p className="text-xs" style={{ color: "var(--color-border)" }}>
-        Full AI analyst launching in M6
-      </p>
     </div>
   );
 }
@@ -110,6 +107,7 @@ function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
+  const [noKey, setNoKey] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,31 +115,55 @@ function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  function sendMessage(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || typing) return;
+  async function send(text: string) {
+    if (!text.trim() || typing) return;
 
     const userMsg: Message = { role: "user", content: text };
-    setMessages((prev) => [...prev, userMsg]);
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setInput("");
     setTyping(true);
 
-    // Simulate a short delay then respond with placeholder
-    setTimeout(() => {
-      const reply: Message = {
+    try {
+      const result = await getAiChat({
+        data: { messages: newMessages },
+      });
+
+      if ("error" in result) {
+        if (result.error === "no_key") {
+          setNoKey(true);
+          setMessages(prev => [...prev, {
+            role: "assistant",
+            content: "AI chat requires a GEMINI_API_KEY environment variable. Add it to Vercel and redeploy.",
+          }]);
+        } else {
+          setMessages(prev => [...prev, {
+            role: "assistant",
+            content: `Sorry, something went wrong: ${result.error}`,
+          }]);
+        }
+      } else {
+        setMessages(prev => [...prev, { role: "assistant", content: result.reply }]);
+      }
+    } catch {
+      setMessages(prev => [...prev, {
         role: "assistant",
-        content: ASSISTANT_PLACEHOLDER,
-      };
-      setMessages((prev) => [...prev, reply]);
+        content: "Connection error. Please try again.",
+      }]);
+    } finally {
       setTyping(false);
-    }, 800);
+    }
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    send(input.trim());
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage(e as unknown as React.FormEvent);
+      send(input.trim());
     }
   }
 
@@ -162,7 +184,7 @@ function ChatPage() {
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
         {messages.length === 0 ? (
-          <EmptyState />
+          <EmptyState onSuggestion={(s) => send(s)} />
         ) : (
           messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)
         )}
@@ -203,7 +225,7 @@ function ChatPage() {
 
       {/* Input bar */}
       <form
-        onSubmit={sendMessage}
+        onSubmit={handleSubmit}
         className="flex-shrink-0 mt-3 flex items-end gap-2 rounded-xl border p-2"
         style={{ background: "var(--color-surface)", borderColor: "var(--color-border)" }}
       >
@@ -212,14 +234,15 @@ function ChatPage() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask about any stock, sector, or concept…"
+          placeholder={noKey ? "Add GEMINI_API_KEY to enable AI chat…" : "Ask about any stock, sector, or concept…"}
+          disabled={noKey}
           rows={1}
           className="flex-1 resize-none rounded-lg px-3 py-2 text-sm outline-none bg-transparent"
           style={{ color: "var(--color-fg)", maxHeight: "120px" }}
         />
         <button
           type="submit"
-          disabled={!input.trim() || typing}
+          disabled={!input.trim() || typing || noKey}
           className="btn-primary text-sm px-3 py-2 self-end"
         >
           Send

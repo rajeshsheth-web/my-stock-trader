@@ -29,7 +29,14 @@ export type AiVerdict = {
   detail?: string
 }
 
-const GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-exp',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro',
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-pro',
+]
 
 async function callGemini(key: string, prompt: string): Promise<string> {
   // First check what models are actually available
@@ -66,6 +73,56 @@ async function callGemini(key: string, prompt: string): Promise<string> {
   }
   throw new Error(`No working model found. Available: [${available.join(', ')}]`)
 }
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
+
+const ChatInput = z.object({
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })),
+})
+
+export const getAiChat = createServerFn({ method: 'POST' })
+  .inputValidator((d: unknown) => ChatInput.parse(d))
+  .handler(async ({ data }): Promise<{ reply: string } | { error: string }> => {
+    const key = process.env.GEMINI_API_KEY || ''
+    if (!key) return { error: 'no_key' }
+
+    const systemPrompt = `You are Bloomberg Desk AI, a concise equity research assistant. You help retail investors understand stocks, sectors, and financial concepts. Be specific, data-driven, and direct. Use plain text — no markdown, no bullet symbols. Keep responses under 150 words unless a longer explanation is clearly needed.`
+
+    const contents = [
+      { role: 'user', parts: [{ text: systemPrompt }] },
+      { role: 'model', parts: [{ text: 'Understood. Ready to help with equity research.' }] },
+      ...data.messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }],
+      })),
+    ]
+
+    try {
+      for (const model of GEMINI_MODELS) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents }),
+          signal: AbortSignal.timeout(20000),
+        })
+        if (res.status === 404) continue
+        if (!res.ok) {
+          const txt = await res.text()
+          return { error: `API error (${res.status}): ${txt.slice(0, 200)}` }
+        }
+        const json = await res.json()
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+        if (!text) return { error: 'Empty response from AI' }
+        return { reply: text.trim() }
+      }
+      return { error: 'No working AI model found' }
+    } catch (e: any) {
+      return { error: String(e?.message ?? e) }
+    }
+  })
+
+// ─── Verdict ──────────────────────────────────────────────────────────────────
 
 export const getAiVerdict = createServerFn({ method: 'GET' })
   .inputValidator((d: unknown) => StockInput.parse(d))

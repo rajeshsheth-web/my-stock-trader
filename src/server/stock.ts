@@ -16,20 +16,18 @@ async function yfFetch(url: string) {
   return r.json()
 }
 
-// Yahoo Finance v10 requires a crumb+cookie pair obtained via a handshake.
-// Cache in module scope — stays warm between Vercel invocations.
+// Yahoo Finance v10 requires a crumb+cookie pair. Cache in module scope.
 let _crumbCache: { crumb: string; cookie: string; expiresAt: number } | null = null
 
 async function getYahooCrumb() {
   if (_crumbCache && _crumbCache.expiresAt > Date.now()) return _crumbCache
 
-  // Step 1: hit the consent page to get a session cookie
-  const consentRes = await fetch('https://fc.yahoo.com', {
-    headers: { 'User-Agent': UA, 'Accept': '*/*' },
-    signal: AbortSignal.timeout(8000),
+  // Step 1: hit finance.yahoo.com to get a session cookie
+  const consentRes = await fetch('https://finance.yahoo.com/', {
+    headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+    signal: AbortSignal.timeout(10000),
     redirect: 'follow',
   })
-  // Collect all Set-Cookie values
   const rawCookies: string[] = []
   consentRes.headers.forEach((val, key) => {
     if (key.toLowerCase() === 'set-cookie') rawCookies.push(val.split(';')[0])
@@ -71,11 +69,28 @@ async function fetchChart(symbol: string, range = '1d', interval = '1d') {
 function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]) {
   const ms: string = meta?.marketState ?? 'REGULAR'
   if (ms === 'REGULAR') return null
-  if (!ts.length) return null
 
   const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
 
-  // Last valid candle close = current extended-hours price
+  // Prefer direct meta fields Yahoo provides during active extended sessions
+  if (isPreMarket && meta?.preMarketPrice != null && meta.preMarketPrice > 0) {
+    const p: number = meta.preMarketPrice
+    const ch: number = meta.preMarketChange ?? (p - (meta.chartPreviousClose ?? meta.regularMarketPrice ?? p))
+    const pct: number = meta.preMarketChangePercent ?? (meta.regularMarketPrice > 0 ? (ch / meta.regularMarketPrice) * 100 : 0)
+    return { preMarketPrice: p, preMarketChange: ch, preMarketChangePercent: pct, postMarketPrice: null, postMarketChange: null, postMarketChangePercent: null }
+  }
+  if (!isPreMarket && meta?.postMarketPrice != null && meta.postMarketPrice > 0) {
+    const p: number = meta.postMarketPrice
+    const ref: number = meta.chartPreviousClose ?? meta.regularMarketPrice ?? p
+    const ch: number = meta.postMarketChange ?? (p - ref)
+    const pct: number = meta.postMarketChangePercent ?? (ref > 0 ? (ch / ref) * 100 : 0)
+    return { preMarketPrice: null, preMarketChange: null, preMarketChangePercent: null, postMarketPrice: p, postMarketChange: ch, postMarketChangePercent: pct }
+  }
+
+  // Fall back to computing from candles (covers CLOSED state with recent AH data)
+  if (!ts.length) return null
+
+  // Last valid candle = extended-hours price
   let extPrice: number | null = null
   for (let i = closes.length - 1; i >= 0; i--) {
     const c = closes[i]
@@ -83,12 +98,11 @@ function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]
   }
   if (extPrice == null) return null
 
-  // Last regular-session candle as change reference.
-  // Use regularMarketTime as the session boundary since it's the most reliable field.
+  // Find last regular-session close using session end boundary
   const boundary: number =
     (meta?.currentTradingPeriod?.regular?.end ?? 0) ||
     (meta?.regularMarketTime ?? 0)
-  let regularClose: number = meta?.regularMarketPrice ?? extPrice
+  let regularClose: number = meta?.chartPreviousClose ?? meta?.regularMarketPrice ?? extPrice
   if (boundary > 0) {
     for (let i = ts.length - 1; i >= 0; i--) {
       const c = closes[i]
@@ -98,6 +112,9 @@ function extractExtendedHours(meta: any, ts: number[], closes: (number | null)[]
       }
     }
   }
+
+  // Only return if price actually differs from regular close (skip zero-change case)
+  if (Math.abs(extPrice - regularClose) < 0.001) return null
 
   const extChange = extPrice - regularClose
   const extChangePct = regularClose > 0 ? (extChange / regularClose) * 100 : 0
@@ -206,52 +223,76 @@ export const getStockQuote = createServerFn({ method: 'GET' })
 
 // ─── getStockStats ────────────────────────────────────────────────────────────
 
+async function fetchV7Quote(symbol: string) {
+  // v7/quote returns most fundamental fields without crumb auth
+  const fields = [
+    'trailingPE', 'forwardPE', 'epsTrailingTwelveMonths', 'epsForward',
+    'dividendYield', 'beta', 'sharesOutstanding', 'floatShares',
+    'marketCap', 'bookValue', 'priceToBook',
+    'totalRevenue', 'grossMargins', 'profitMargins',
+    'debtToEquity', 'returnOnEquity', 'currentRatio',
+  ].join(',')
+  const url = `${YF1}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}&fields=${fields}`
+  const json = await yfFetch(url)
+  return json?.quoteResponse?.result?.[0] ?? null
+}
+
+async function fetchInstitutionalHolders(symbol: string) {
+  try {
+    const path = `/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=institutionOwnership&formatted=false`
+    const json = await yfFetchAuthed(path)
+    const io = json?.quoteSummary?.result?.[0]?.institutionOwnership ?? {}
+    const raw = (obj: any, key: string) => {
+      const v = obj?.[key]
+      if (v == null) return null
+      if (typeof v === 'object' && 'raw' in v) return v.raw ?? null
+      if (typeof v === 'number') return v
+      return null
+    }
+    return (io.ownershipList ?? []).slice(0, 10).map((h: any) => ({
+      name: h.organization?.longFmt ?? h.organization?.fmt ?? '',
+      shares: raw(h, 'position'),
+      pctHeld: raw(h, 'pctHeld'),
+      reportDate: raw(h, 'reportDate'),
+    }))
+  } catch {
+    return []
+  }
+}
+
 export const getStockStats = createServerFn({ method: 'GET' })
   .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
   .handler(async ({ data: symbol }) => {
     try {
-      const path = `/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,financialData,institutionOwnership&formatted=false`
-      const json = await yfFetchAuthed(path)
-      const r = json?.quoteSummary?.result?.[0]
-      if (!r) return null
-      const sd = r.summaryDetail ?? {}
-      const ks = r.defaultKeyStatistics ?? {}
-      const fd = r.financialData ?? {}
-      const io = r.institutionOwnership ?? {}
+      const [q, holders] = await Promise.all([
+        fetchV7Quote(symbol),
+        fetchInstitutionalHolders(symbol),
+      ])
+      if (!q) return null
 
-      const raw = (obj: any, key: string) => {
-        const v = obj?.[key]
-        if (v == null) return null
-        if (typeof v === 'object' && 'raw' in v) return v.raw ?? null
-        if (typeof v === 'number') return v
-        return null
+      const n = (key: string): number | null => {
+        const v = q[key]
+        return (typeof v === 'number' && isFinite(v)) ? v : null
       }
 
-      const holders = (io.ownershipList ?? []).slice(0, 10).map((h: any) => ({
-        name: h.organization?.longFmt ?? h.organization?.fmt ?? '',
-        shares: raw(h, 'position'),
-        pctHeld: raw(h, 'pctHeld'),
-        reportDate: raw(h, 'reportDate'),
-      }))
-
       return {
-        peRatio: raw(sd, 'trailingPE'),
-        forwardPE: raw(sd, 'forwardPE'),
-        eps: raw(ks, 'trailingEps'),
-        forwardEps: raw(ks, 'forwardEps'),
-        dividendYield: raw(sd, 'dividendYield'),
-        beta: raw(sd, 'beta'),
-        sharesOutstanding: raw(ks, 'sharesOutstanding'),
-        floatShares: raw(ks, 'floatShares'),
-        revenue: raw(fd, 'totalRevenue'),
-        grossMargins: raw(fd, 'grossMargins'),
-        profitMargins: raw(fd, 'profitMargins'),
-        debtToEquity: raw(fd, 'debtToEquity'),
-        returnOnEquity: raw(fd, 'returnOnEquity'),
-        currentRatio: raw(fd, 'currentRatio'),
-        marketCap: raw(sd, 'marketCap'),
-        bookValue: raw(ks, 'bookValue'),
-        priceToBook: raw(ks, 'priceToBook'),
+        peRatio: n('trailingPE'),
+        forwardPE: n('forwardPE'),
+        eps: n('epsTrailingTwelveMonths'),
+        forwardEps: n('epsForward'),
+        dividendYield: n('dividendYield'),
+        beta: n('beta'),
+        sharesOutstanding: n('sharesOutstanding'),
+        floatShares: n('floatShares'),
+        revenue: n('totalRevenue'),
+        grossMargins: n('grossMargins'),
+        profitMargins: n('profitMargins'),
+        debtToEquity: n('debtToEquity'),
+        returnOnEquity: n('returnOnEquity'),
+        currentRatio: n('currentRatio'),
+        marketCap: n('marketCap'),
+        bookValue: n('bookValue'),
+        priceToBook: n('priceToBook'),
         institutionalHolders: holders,
       }
     } catch {
