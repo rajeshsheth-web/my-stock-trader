@@ -5,10 +5,11 @@ const SYMBOL_RE = /^[A-Z0-9.\-^]{1,12}$/
 const YF1 = 'https://query1.finance.yahoo.com'
 const YF2 = 'https://query2.finance.yahoo.com'
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+const UA_SIMPLE = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 
 async function yfFetch(url: string) {
   const r = await fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+    headers: { 'User-Agent': UA_SIMPLE, 'Accept': 'application/json' },
     signal: AbortSignal.timeout(5000),
   })
   if (!r.ok) throw new Error(`YF HTTP ${r.status}`)
