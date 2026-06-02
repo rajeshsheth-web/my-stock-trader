@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState, useEffect, lazy, Suspense } from 'react'
-import { getStockOverview, getStockQuote } from '@/server/stock'
+import { getStockOverview, getStockQuote, getStockStats, getStockNews, getRangeCandles } from '@/server/stock'
 import { getAiVerdict, type AiVerdict } from '@/server/ai'
 import { useAuth } from './__root'
 
@@ -390,10 +390,342 @@ function AiVerdictCard({ stock }: { stock: NonNullable<ReturnType<typeof Route.u
   )
 }
 
-function ComingSoon({ label }: { label: string }) {
+// ─── Statistics tab ───────────────────────────────────────────────────────────
+
+function fmtDollarAbbrev(n: number | null) {
+  if (n == null) return 'N/A'
+  const abs = Math.abs(n)
+  if (abs >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T'
+  if (abs >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B'
+  if (abs >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M'
+  if (abs >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K'
+  return '$' + n.toFixed(2)
+}
+
+function fmtPct(n: number | null) {
+  if (n == null) return 'N/A'
+  return (n * 100).toFixed(2) + '%'
+}
+
+function fmtNum(n: number | null, decimals = 2) {
+  if (n == null) return 'N/A'
+  return n.toFixed(decimals)
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="card flex items-center justify-center py-12 text-center">
-      <p className="text-sm" style={{ color: 'var(--color-muted)' }}>{label}</p>
+    <div className="flex justify-between items-center py-2 border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
+      <span className="text-sm" style={{ color: 'var(--color-muted)' }}>{label}</span>
+      <span className="text-sm font-semibold tabular-nums" style={{ color: 'var(--color-fg)' }}>{value}</span>
+    </div>
+  )
+}
+
+function StatSkeleton() {
+  return (
+    <div className="space-y-2 animate-pulse">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="flex justify-between py-2">
+          <span className="h-4 rounded bg-[var(--color-border)] w-28" />
+          <span className="h-4 rounded bg-[var(--color-border)] w-20" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function StatisticsTab({ symbol }: { symbol: string }) {
+  const [stats, setStats] = useState<Awaited<ReturnType<typeof getStockStats>> | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    getStockStats({ data: symbol }).then(s => { setStats(s); setLoading(false) }).catch(() => setLoading(false))
+  }, [symbol])
+
+  const sections = stats ? [
+    {
+      title: 'Valuation',
+      rows: [
+        { label: 'Market Cap', value: fmtDollarAbbrev(stats.marketCap) },
+        { label: 'P/E (TTM)', value: fmtNum(stats.peRatio) },
+        { label: 'Forward P/E', value: fmtNum(stats.forwardPE) },
+        { label: 'EPS (TTM)', value: stats.eps != null ? '$' + fmtNum(stats.eps) : 'N/A' },
+        { label: 'Forward EPS', value: stats.forwardEps != null ? '$' + fmtNum(stats.forwardEps) : 'N/A' },
+        { label: 'Price/Book', value: fmtNum(stats.priceToBook) },
+      ],
+    },
+    {
+      title: 'Dividends & Risk',
+      rows: [
+        { label: 'Dividend Yield', value: fmtPct(stats.dividendYield) },
+        { label: 'Beta', value: fmtNum(stats.beta) },
+      ],
+    },
+    {
+      title: 'Shares',
+      rows: [
+        { label: 'Shares Outstanding', value: stats.sharesOutstanding != null ? fmtAbbrev(stats.sharesOutstanding) : 'N/A' },
+        { label: 'Float', value: stats.floatShares != null ? fmtAbbrev(stats.floatShares) : 'N/A' },
+      ],
+    },
+    {
+      title: 'Financials',
+      rows: [
+        { label: 'Revenue (TTM)', value: fmtDollarAbbrev(stats.revenue) },
+        { label: 'Gross Margin', value: fmtPct(stats.grossMargins) },
+        { label: 'Profit Margin', value: fmtPct(stats.profitMargins) },
+        { label: 'Debt/Equity', value: fmtNum(stats.debtToEquity) },
+        { label: 'ROE', value: fmtPct(stats.returnOnEquity) },
+        { label: 'Current Ratio', value: fmtNum(stats.currentRatio) },
+      ],
+    },
+  ] : []
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {loading
+        ? [0, 1, 2, 3].map(i => (
+          <div key={i} className="card">
+            <StatSkeleton />
+          </div>
+        ))
+        : !stats
+          ? <div className="card col-span-2 py-12 text-center"><p className="text-sm" style={{ color: 'var(--color-muted)' }}>Statistics not available for this symbol.</p></div>
+          : sections.map(sec => (
+            <div key={sec.title} className="card">
+              <h3 className="text-xs font-semibold uppercase mb-2" style={{ color: 'var(--color-muted)' }}>{sec.title}</h3>
+              {sec.rows.map(r => <StatRow key={r.label} label={r.label} value={r.value} />)}
+            </div>
+          ))
+      }
+    </div>
+  )
+}
+
+// ─── Historical tab ───────────────────────────────────────────────────────────
+
+type HistoricalRange = '1W' | '1M' | '3M' | '6M' | '1Y'
+const HIST_CONFIG: Record<HistoricalRange, { range: string; interval: string }> = {
+  '1W': { range: '5d',  interval: '1d' },
+  '1M': { range: '1mo', interval: '1d' },
+  '3M': { range: '3mo', interval: '1d' },
+  '6M': { range: '6mo', interval: '1d' },
+  '1Y': { range: '1y',  interval: '1wk' },
+}
+
+function fmtVolume(n: number) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return String(n)
+}
+
+function fmtHistDate(ts: number) {
+  return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function HistoricalTab({ symbol }: { symbol: string }) {
+  const [range, setRange] = useState<HistoricalRange>('1M')
+  const [candles, setCandles] = useState<Awaited<ReturnType<typeof getRangeCandles>>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    const { range: r, interval: i } = HIST_CONFIG[range]
+    getRangeCandles({ data: { symbol, range: r, interval: i } })
+      .then(c => { setCandles(c); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [symbol, range])
+
+  function downloadCsv() {
+    const rows = [...candles].reverse()
+    const header = 'Date,Open,High,Low,Close,Volume'
+    const lines = rows.map(c => `${fmtHistDate(c.time)},${c.open.toFixed(2)},${c.high.toFixed(2)},${c.low.toFixed(2)},${c.close.toFixed(2)},${c.volume}`)
+    const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${symbol}_${range}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const displayCandles = [...candles].reverse()
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-1">
+          {(['1W', '1M', '3M', '6M', '1Y'] as HistoricalRange[]).map(r => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className="px-3 py-1 text-xs font-medium rounded transition-colors"
+              style={range === r
+                ? { background: 'var(--color-primary)', color: '#fff' }
+                : { background: 'var(--color-surface)', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+        <button onClick={downloadCsv} className="btn-ghost text-xs py-1 px-2" style={{ color: 'var(--color-muted)' }}>
+          Download CSV
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="animate-pulse space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-8 rounded bg-[var(--color-border)]" />
+          ))}
+        </div>
+      ) : displayCandles.length === 0 ? (
+        <p className="text-sm text-center py-8" style={{ color: 'var(--color-muted)' }}>No data available.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b" style={{ borderColor: 'var(--color-border)' }}>
+                {['Date', 'Open', 'High', 'Low', 'Close', 'Volume'].map(h => (
+                  <th key={h} className="text-left pb-2 pr-4 text-xs font-semibold" style={{ color: 'var(--color-muted)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {displayCandles.map((c, i) => (
+                <tr key={i} className="border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
+                  <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{fmtHistDate(c.time)}</td>
+                  <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{c.open.toFixed(2)}</td>
+                  <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{c.high.toFixed(2)}</td>
+                  <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{c.low.toFixed(2)}</td>
+                  <td className="py-2 pr-4 tabular-nums font-semibold" style={{ color: 'var(--color-fg)' }}>{c.close.toFixed(2)}</td>
+                  <td className="py-2 tabular-nums" style={{ color: 'var(--color-muted)' }}>{fmtVolume(c.volume)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── News tab ─────────────────────────────────────────────────────────────────
+
+function timeAgo(ts: number) {
+  const diff = Math.floor(Date.now() / 1000) - ts
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return Math.floor(diff / 60) + ' minutes ago'
+  if (diff < 86400) return Math.floor(diff / 3600) + ' hours ago'
+  if (diff < 2592000) return Math.floor(diff / 86400) + ' days ago'
+  return Math.floor(diff / 2592000) + ' months ago'
+}
+
+function NewsTab({ symbol }: { symbol: string }) {
+  const [news, setNews] = useState<Awaited<ReturnType<typeof getStockNews>>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    getStockNews({ data: symbol }).then(n => { setNews(n); setLoading(false) }).catch(() => setLoading(false))
+  }, [symbol])
+
+  if (loading) {
+    return (
+      <div className="card animate-pulse space-y-4">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="space-y-2">
+            <div className="h-4 rounded bg-[var(--color-border)] w-3/4" />
+            <div className="h-3 rounded bg-[var(--color-border)] w-32" />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (news.length === 0) {
+    return <div className="card py-12 text-center"><p className="text-sm" style={{ color: 'var(--color-muted)' }}>No news available.</p></div>
+  }
+
+  return (
+    <div className="card divide-y" style={{ borderColor: 'var(--color-border)' }}>
+      {news.map(item => (
+        <div key={item.uuid} className="py-4 first:pt-0 last:pb-0">
+          <a
+            href={item.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-medium hover:underline"
+            style={{ color: 'var(--color-fg)' }}
+          >
+            {item.title}
+          </a>
+          <p className="mt-1 text-xs" style={{ color: 'var(--color-muted)' }}>
+            {item.publisher} · {timeAgo(item.providerPublishTime)}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Holders tab ──────────────────────────────────────────────────────────────
+
+function HoldersTab({ symbol }: { symbol: string }) {
+  const [stats, setStats] = useState<Awaited<ReturnType<typeof getStockStats>> | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    getStockStats({ data: symbol }).then(s => { setStats(s); setLoading(false) }).catch(() => setLoading(false))
+  }, [symbol])
+
+  const holders = stats?.institutionalHolders ?? []
+
+  if (loading) {
+    return (
+      <div className="card animate-pulse space-y-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-8 rounded bg-[var(--color-border)]" />
+        ))}
+      </div>
+    )
+  }
+
+  if (!stats || holders.length === 0) {
+    return (
+      <div className="card py-12 text-center">
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>Holder data not available for this symbol.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card">
+      <h3 className="text-xs font-semibold uppercase mb-4" style={{ color: 'var(--color-muted)' }}>Top Institutional Holders</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b" style={{ borderColor: 'var(--color-border)' }}>
+              {['Name', 'Shares', '% Held', 'Report Date'].map(h => (
+                <th key={h} className="text-left pb-2 pr-4 text-xs font-semibold" style={{ color: 'var(--color-muted)' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {holders.map((h: any, i: number) => (
+              <tr key={i} className="border-b last:border-0" style={{ borderColor: 'var(--color-border)' }}>
+                <td className="py-2 pr-4 font-medium" style={{ color: 'var(--color-fg)' }}>{h.name || '—'}</td>
+                <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{h.shares != null ? fmtAbbrev(h.shares) : '—'}</td>
+                <td className="py-2 pr-4 tabular-nums" style={{ color: 'var(--color-fg)' }}>{h.pctHeld != null ? (h.pctHeld * 100).toFixed(2) + '%' : '—'}</td>
+                <td className="py-2 tabular-nums" style={{ color: 'var(--color-muted)' }}>{h.reportDate != null ? fmtHistDate(h.reportDate) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -446,10 +778,10 @@ function IndexPage() {
           <YFChart symbol={symbol} />
         </Suspense>
       )}
-      {tab === 'Statistics' && <ComingSoon label="Detailed statistics coming soon" />}
-      {tab === 'Historical' && <ComingSoon label="Historical data coming soon" />}
-      {tab === 'News' && <ComingSoon label="News feed coming soon" />}
-      {tab === 'Holders' && <ComingSoon label="Holder data coming soon" />}
+      {tab === 'Statistics' && <StatisticsTab symbol={symbol} />}
+      {tab === 'Historical' && <HistoricalTab symbol={symbol} />}
+      {tab === 'News' && <NewsTab symbol={symbol} />}
+      {tab === 'Holders' && <HoldersTab symbol={symbol} />}
     </div>
   )
 }

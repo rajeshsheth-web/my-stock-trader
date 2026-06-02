@@ -160,6 +160,89 @@ export const getStockQuote = createServerFn({ method: 'GET' })
     }
   })
 
+// ─── getStockStats ────────────────────────────────────────────────────────────
+
+export const getStockStats = createServerFn({ method: 'GET' })
+  .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
+  .handler(async ({ data: symbol }) => {
+    try {
+      const url = `${YF1}/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,financialData,institutionOwnership`
+      const json = await yfFetch(url)
+      const r = json?.quoteSummary?.result?.[0]
+      if (!r) return null
+      const sd = r.summaryDetail ?? {}
+      const ks = r.defaultKeyStatistics ?? {}
+      const fd = r.financialData ?? {}
+      const io = r.institutionOwnership ?? {}
+
+      const raw = (obj: any, key: string) => {
+        const v = obj?.[key]
+        if (v == null) return null
+        if (typeof v === 'object' && 'raw' in v) return v.raw ?? null
+        if (typeof v === 'number') return v
+        return null
+      }
+
+      const holders = (io.ownershipList ?? []).slice(0, 10).map((h: any) => ({
+        name: h.organization?.longFmt ?? h.organization?.fmt ?? '',
+        shares: raw(h, 'position'),
+        pctHeld: raw(h, 'pctHeld'),
+        reportDate: raw(h, 'reportDate'),
+      }))
+
+      return {
+        peRatio: raw(sd, 'trailingPE'),
+        forwardPE: raw(sd, 'forwardPE'),
+        eps: raw(ks, 'trailingEps'),
+        forwardEps: raw(ks, 'forwardEps'),
+        dividendYield: raw(sd, 'dividendYield'),
+        beta: raw(sd, 'beta'),
+        sharesOutstanding: raw(ks, 'sharesOutstanding'),
+        floatShares: raw(ks, 'floatShares'),
+        revenue: raw(fd, 'totalRevenue'),
+        grossMargins: raw(fd, 'grossMargins'),
+        profitMargins: raw(fd, 'profitMargins'),
+        debtToEquity: raw(fd, 'debtToEquity'),
+        returnOnEquity: raw(fd, 'returnOnEquity'),
+        currentRatio: raw(fd, 'currentRatio'),
+        marketCap: raw(sd, 'marketCap'),
+        bookValue: raw(ks, 'bookValue'),
+        priceToBook: raw(ks, 'priceToBook'),
+        institutionalHolders: holders,
+      }
+    } catch {
+      return null
+    }
+  })
+
+// ─── getStockNews ─────────────────────────────────────────────────────────────
+
+export const getStockNews = createServerFn({ method: 'GET' })
+  .inputValidator((s: unknown) => z.string().regex(SYMBOL_RE).parse(s))
+  .handler(async ({ data: symbol }) => {
+    try {
+      const url = `${YF1}/v1/finance/search?q=${encodeURIComponent(symbol)}&newsCount=15&enableFuzzyQuery=false`
+      const json = await yfFetch(url)
+      const items: any[] = json?.news ?? []
+      const seen = new Set<string>()
+      return items
+        .filter(n => {
+          if (!n.uuid || seen.has(n.uuid)) return false
+          seen.add(n.uuid)
+          return true
+        })
+        .map(n => ({
+          title: n.title ?? '',
+          publisher: n.publisher ?? '',
+          link: n.link ?? '',
+          providerPublishTime: n.providerPublishTime ?? 0,
+          uuid: n.uuid,
+        }))
+    } catch {
+      return []
+    }
+  })
+
 // ─── getRangeCandles ──────────────────────────────────────────────────────────
 
 export const getRangeCandles = createServerFn({ method: 'GET' })
