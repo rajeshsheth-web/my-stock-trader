@@ -101,10 +101,14 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
 
   function extInfo(q: typeof stock) {
     if (q.marketState === 'REGULAR') return null
+    // Pre-market: show pre price
     if (isPreMarket(q.marketState) && q.preMarketPrice != null)
       return { price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' }
+    // After-hours / overnight: prefer postMarket, fall back to preMarket (Yahoo stores overnight as preMarket in CLOSED state)
     if (q.postMarketPrice != null)
-      return { price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: isPostMarket(q.marketState) ? 'After Hours' : 'Closed' }
+      return { price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' }
+    if (q.preMarketPrice != null)
+      return { price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'After Hours' }
     return null
   }
 
@@ -126,7 +130,9 @@ function QuoteHeader({ stock }: { stock: NonNullable<ReturnType<typeof Route.use
         } else if ((ms === 'PRE' || ms === 'PREPRE') && q.preMarketPrice != null) {
           setExtData({ price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'Pre-Market' })
         } else if (q.postMarketPrice != null) {
-          setExtData({ price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: (ms === 'POST' || ms === 'POSTPOST') ? 'After Hours' : 'Closed' })
+          setExtData({ price: q.postMarketPrice, change: q.postMarketChange ?? null, pct: q.postMarketChangePercent ?? null, label: 'After Hours' })
+        } else if (q.preMarketPrice != null) {
+          setExtData({ price: q.preMarketPrice, change: q.preMarketChange ?? null, pct: q.preMarketChangePercent ?? null, label: 'After Hours' })
         }
       } catch {}
     }, 10_000)

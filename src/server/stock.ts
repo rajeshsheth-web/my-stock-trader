@@ -72,19 +72,18 @@ async function fetchExtendedHours(symbol: string) {
     const url = `${YF1}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}&fields=marketState,preMarketPrice,preMarketChange,preMarketChangePercent,postMarketPrice,postMarketChange,postMarketChangePercent`
     const json = await yfFetch(url)
     const q = json?.quoteResponse?.result?.[0]
-    if (!q) return null
-    const ms: string = q.marketState ?? 'CLOSED'
-    const isPreMarket = ms === 'PRE' || ms === 'PREPRE'
-    const isPre = isPreMarket && q.preMarketPrice != null && q.preMarketPrice > 0
-    const isPost = !isPreMarket && ms !== 'REGULAR' && q.postMarketPrice != null && q.postMarketPrice > 0
-    if (!isPre && !isPost) return null
+    if (!q || q.marketState === 'REGULAR') return null
+
+    const n = (v: any): number | null => (typeof v === 'number' && isFinite(v) && v !== 0) ? v : null
+
+    // Return whatever extended-hours prices Yahoo has — let the UI decide which to show
     return {
-      preMarketPrice: isPre ? (q.preMarketPrice as number) : null,
-      preMarketChange: isPre ? (q.preMarketChange as number ?? null) : null,
-      preMarketChangePercent: isPre ? (q.preMarketChangePercent as number ?? null) : null,
-      postMarketPrice: isPost ? (q.postMarketPrice as number) : null,
-      postMarketChange: isPost ? (q.postMarketChange as number ?? null) : null,
-      postMarketChangePercent: isPost ? (q.postMarketChangePercent as number ?? null) : null,
+      preMarketPrice: n(q.preMarketPrice),
+      preMarketChange: n(q.preMarketChange),
+      preMarketChangePercent: n(q.preMarketChangePercent),
+      postMarketPrice: n(q.postMarketPrice),
+      postMarketChange: n(q.postMarketChange),
+      postMarketChangePercent: n(q.postMarketChangePercent),
     }
   } catch {
     return null
