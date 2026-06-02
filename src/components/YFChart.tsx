@@ -27,18 +27,19 @@ const COLORS = {
   volumeDown: 'rgba(235,15,41,0.5)',
 }
 
-const SESSION_LINES = [
-  { hh: 4,  mm: 0,  label: 'Pre',   color: 'rgba(217,119,6,0.65)',   dash: true  },
-  { hh: 9,  mm: 30, label: 'Open',  color: 'rgba(0,135,60,0.85)',    dash: false },
-  { hh: 16, mm: 0,  label: 'Close', color: 'rgba(235,15,41,0.85)',   dash: false },
-  { hh: 20, mm: 0,  label: 'AH',    color: 'rgba(217,119,6,0.65)',   dash: true  },
+const SESSION_DEFS = [
+  { hh: 4,  mm: 0,  label: 'Pre',   color: 'rgba(217,119,6,0.65)',  dash: true  },
+  { hh: 9,  mm: 30, label: 'Open',  color: 'rgba(0,135,60,0.85)',   dash: false },
+  { hh: 16, mm: 0,  label: 'Close', color: 'rgba(235,15,41,0.85)',  dash: false },
+  { hh: 20, mm: 0,  label: 'AH',    color: 'rgba(217,119,6,0.65)',  dash: true  },
 ]
 
 type RangeKey = '1D' | '5D' | '1M' | '6M' | 'YTD' | '1Y' | '5Y' | 'Max'
 type ModeKey = 'Area' | 'Candlestick' | 'Line' | 'Baseline'
 
+// 1D loads 10d at 5m so the user can scroll back through previous sessions
 const RANGES: { key: RangeKey; range: string; interval: string }[] = [
-  { key: '1D',  range: '1d',   interval: '5m'  },
+  { key: '1D',  range: '10d',  interval: '5m'  },
   { key: '5D',  range: '5d',   interval: '15m' },
   { key: '1M',  range: '1mo',  interval: '1d'  },
   { key: '6M',  range: '6mo',  interval: '1d'  },
@@ -56,21 +57,30 @@ interface Candle {
 
 export interface YFChartProps { symbol: string }
 
-// ─── Helper: compute ET session boundary timestamps from any intraday ts ──────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getSessionBoundaryTs(anyTs: number): { time: number; label: string; color: string; dash: boolean }[] {
+// Returns ET session boundary timestamps for the trading day that contains anyTs.
+function getSessionBoundaryTs(anyTs: number) {
   const d = new Date(anyTs * 1000)
-  // Get "wall clock" NY time as a JS Date (UTC values = NY local values)
   const nyWall = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  // UTC offset: positive = NY is behind UTC
   const utcOffsetMs = d.getTime() - nyWall.getTime()
-  // Midnight in NY wall time
   nyWall.setHours(0, 0, 0, 0)
-  return SESSION_LINES.map(({ hh, mm, label, color, dash }) => {
-    const nyBoundary = new Date(nyWall)
-    nyBoundary.setHours(hh, mm, 0, 0)
-    return { time: Math.floor((nyBoundary.getTime() + utcOffsetMs) / 1000), label, color, dash }
+  return SESSION_DEFS.map(({ hh, mm, label, color, dash }) => {
+    const t = new Date(nyWall); t.setHours(hh, mm, 0, 0)
+    return { time: Math.floor((t.getTime() + utcOffsetMs) / 1000), label, color, dash }
   })
+}
+
+// Returns session boundaries for every unique NY trading day present in the candle array.
+function allSessionBoundaries(candles: Candle[]) {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' })
+  const seen = new Set<string>()
+  const result: ReturnType<typeof getSessionBoundaryTs> = []
+  for (const c of candles) {
+    const day = fmt.format(new Date(c.time * 1000))
+    if (!seen.has(day)) { seen.add(day); result.push(...getSessionBoundaryTs(c.time)) }
+  }
+  return result
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -90,7 +100,7 @@ export function YFChart({ symbol }: YFChartProps) {
   const volChartRef = useRef<IChartApi | null>(null)
   const priceSeriesRef = useRef<ISeriesApi<'Area' | 'Candlestick' | 'Line' | 'Baseline'> | null>(null)
   const volSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
-  const sessionBoundsRef = useRef<{ time: number; label: string; color: string; dash: boolean }[]>([])
+  const sessionBoundsRef = useRef<ReturnType<typeof getSessionBoundaryTs>>([])
 
   // ── Fetch candles ──────────────────────────────────────────────────────────
 
@@ -99,16 +109,14 @@ export function YFChart({ symbol }: YFChartProps) {
     setLoading(true)
     setError(false)
     setSessionLines([])
-
     const cfg = RANGES.find(r => r.key === rangeKey)!
     getRangeCandles({ data: { symbol, range: cfg.range, interval: cfg.interval } })
       .then(data => { if (!cancelled) { setCandles(data as Candle[]); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
-
     return () => { cancelled = true }
   }, [symbol, rangeKey])
 
-  // ── Recompute session line x-positions ────────────────────────────────────
+  // ── Session line x-positions ───────────────────────────────────────────────
 
   const refreshSessionLines = useCallback(() => {
     const chart = chartRef.current
@@ -127,19 +135,33 @@ export function YFChart({ symbol }: YFChartProps) {
   useEffect(() => {
     if (!priceRef.current || !volumeRef.current) return
 
-    const chartOptions = {
+    // Use local timezone for x-axis labels
+    const timeFormatter = (ts: number) => {
+      const d = new Date(ts * 1000)
+      const h = d.getHours(), m = d.getMinutes()
+      if (h === 0 && m === 0) {
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      }
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    }
+
+    const sharedOpts = {
       layout: { background: { color: COLORS.background }, textColor: COLORS.text },
       grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
       crosshair: { mode: 1 as const },
       rightPriceScale: { borderColor: COLORS.border },
-      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false, visible: true },
       handleScroll: true,
       handleScale: true,
+      localization: { timeFormatter },
     }
 
-    const priceChart = createChart(priceRef.current, { ...chartOptions, height: 280 })
+    const priceChart = createChart(priceRef.current, {
+      ...sharedOpts,
+      height: 280,
+      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false, rightOffset: 5 },
+    })
     const volChart = createChart(volumeRef.current, {
-      ...chartOptions,
+      ...sharedOpts,
       height: 70,
       timeScale: { visible: false },
       rightPriceScale: { borderColor: COLORS.border, scaleMargins: { top: 0.1, bottom: 0 } },
@@ -148,14 +170,9 @@ export function YFChart({ symbol }: YFChartProps) {
     chartRef.current = priceChart
     volChartRef.current = volChart
 
-    // Sync crosshairs
     priceChart.subscribeCrosshairMove(param => {
-      if (param.time) {
-        ;(volChart as any).setCrossHairXY(param.point?.x ?? 0, 0, true)
-      }
+      if (param.time) (volChart as any).setCrossHairXY(param.point?.x ?? 0, 0, true)
     })
-
-    // Update session line positions on scroll/zoom
     priceChart.timeScale().subscribeVisibleLogicalRangeChange(refreshSessionLines)
 
     const ro = new ResizeObserver(() => {
@@ -163,20 +180,17 @@ export function YFChart({ symbol }: YFChartProps) {
       if (volumeRef.current) volChart.resize(volumeRef.current.clientWidth, 70)
       refreshSessionLines()
     })
-    if (priceRef.current) ro.observe(priceRef.current)
+    ro.observe(priceRef.current)
 
     return () => {
       ro.disconnect()
-      priceChart.remove()
-      volChart.remove()
-      chartRef.current = null
-      volChartRef.current = null
-      priceSeriesRef.current = null
-      volSeriesRef.current = null
+      priceChart.remove(); volChart.remove()
+      chartRef.current = null; volChartRef.current = null
+      priceSeriesRef.current = null; volSeriesRef.current = null
     }
   }, [refreshSessionLines])
 
-  // ── Update series when candles or mode change ─────────────────────────────
+  // ── Update series when candles / mode change ──────────────────────────────
 
   useEffect(() => {
     const chart = chartRef.current
@@ -185,12 +199,11 @@ export function YFChart({ symbol }: YFChartProps) {
 
     if (priceSeriesRef.current) { try { chart.removeSeries(priceSeriesRef.current) } catch {} ; priceSeriesRef.current = null }
     if (volSeriesRef.current) { try { volChart.removeSeries(volSeriesRef.current) } catch {} ; volSeriesRef.current = null }
-
     if (candles.length === 0) return
 
     const sorted = [...candles].sort((a, b) => a.time - b.time)
-    let priceSeries: ISeriesApi<'Area' | 'Candlestick' | 'Line' | 'Baseline'>
 
+    let priceSeries: ISeriesApi<'Area' | 'Candlestick' | 'Line' | 'Baseline'>
     if (mode === 'Area') {
       const s = chart.addSeries(AreaSeries, { lineColor: COLORS.primary, topColor: COLORS.areaTop, bottomColor: COLORS.areaBottom, lineWidth: 2 })
       s.setData(sorted.map(c => ({ time: c.time as any, value: c.close })))
@@ -212,21 +225,32 @@ export function YFChart({ symbol }: YFChartProps) {
       s.setData(sorted.map(c => ({ time: c.time as any, value: c.close })))
       priceSeries = s
     }
-
     priceSeriesRef.current = priceSeries
 
     const volSeries = volChart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'right' })
     volSeries.setData(sorted.map(c => ({ time: c.time as any, value: c.volume, color: c.close >= c.open ? COLORS.volumeUp : COLORS.volumeDown })))
     volSeriesRef.current = volSeries
 
-    chart.timeScale().fitContent()
-    volChart.timeScale().fitContent()
+    if (rangeKey === '1D') {
+      // Find the start of the most recent trading day (4 AM ET pre-market open)
+      const lastTs = sorted[sorted.length - 1].time
+      const bounds = getSessionBoundaryTs(lastTs)
+      const preOpenTs = bounds[0].time // 4 AM ET
 
-    // Compute session boundary lines for 1D only
-    if (rangeKey === '1D' && sorted.length > 0) {
-      sessionBoundsRef.current = getSessionBoundaryTs(sorted[0].time)
+      // Find the first candle of that session in the sorted array
+      let fromIdx = sorted.findIndex(c => c.time >= preOpenTs)
+      if (fromIdx < 0) fromIdx = Math.max(0, sorted.length - 100)
+
+      // Set visible range so today's session fills the full chart width
+      chart.timeScale().setVisibleLogicalRange({ from: fromIdx - 1, to: sorted.length - 1 + 3 })
+      volChart.timeScale().setVisibleLogicalRange({ from: fromIdx - 1, to: sorted.length - 1 + 3 })
+
+      // Draw session lines for all loaded days so scrolling shows context
+      sessionBoundsRef.current = allSessionBoundaries(sorted)
       refreshSessionLines()
     } else {
+      chart.timeScale().fitContent()
+      volChart.timeScale().fitContent()
       sessionBoundsRef.current = []
       setSessionLines([])
     }
@@ -242,9 +266,7 @@ export function YFChart({ symbol }: YFChartProps) {
         if (!q || !priceSeriesRef.current) return
         try { priceSeriesRef.current.update({ time: q.timestamp as any, value: q.price }) } catch {}
         const now = new Date()
-        const hour = now.getUTCHours() - 5
-        const mins = now.getUTCMinutes()
-        const total = hour * 60 + mins
+        const total = now.getUTCHours() * 60 + now.getUTCMinutes() - 5 * 60 // rough ET offset
         setIsExtendedHours(!(total >= 570 && total < 960) && total >= 240 && total < 1200)
       } catch {}
     }, 10_000)
@@ -259,14 +281,10 @@ export function YFChart({ symbol }: YFChartProps) {
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b" style={{ borderColor: COLORS.border }}>
         <div className="flex gap-0.5 items-center">
           {RANGES.map(({ key }) => (
-            <button
-              key={key}
-              onClick={() => setRangeKey(key)}
+            <button key={key} onClick={() => setRangeKey(key)}
               className="px-2 py-1 text-xs font-medium rounded transition-colors"
-              style={rangeKey === key ? { background: COLORS.primary, color: '#ffffff' } : { color: COLORS.text, background: 'transparent' }}
-            >
-              {key}
-            </button>
+              style={rangeKey === key ? { background: COLORS.primary, color: '#fff' } : { color: COLORS.text, background: 'transparent' }}
+            >{key}</button>
           ))}
           {isExtendedHours && rangeKey === '1D' && (
             <span style={{ color: '#d97706', fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: 'rgba(217,119,6,0.1)', border: '1px solid rgba(217,119,6,0.3)' }}>
@@ -276,14 +294,10 @@ export function YFChart({ symbol }: YFChartProps) {
         </div>
         <div className="flex gap-0.5">
           {MODES.map(m => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
+            <button key={m} onClick={() => setMode(m)}
               className="px-2 py-1 text-xs font-medium rounded transition-colors"
-              style={mode === m ? { background: COLORS.primary, color: '#ffffff' } : { color: COLORS.text, background: 'transparent' }}
-            >
-              {m}
-            </button>
+              style={mode === m ? { background: COLORS.primary, color: '#fff' } : { color: COLORS.text, background: 'transparent' }}
+            >{m}</button>
           ))}
         </div>
       </div>
@@ -297,7 +311,7 @@ export function YFChart({ symbol }: YFChartProps) {
           </div>
         )}
         {!loading && !error && candles.length === 0 && (
-          <div className="flex items-center justify-center" style={{ height: 352, color: COLORS.text }}>
+          <div className="flex items-center justify-center" style={{ height: 352 }}>
             <p className="text-sm" style={{ color: '#6b7280' }}>No chart data available for this range.</p>
           </div>
         )}
@@ -307,32 +321,14 @@ export function YFChart({ symbol }: YFChartProps) {
           <div style={{ position: 'relative' }}>
             <div ref={priceRef} />
             {sessionLines.map((line, i) => (
-              <div
-                key={i}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: line.x,
-                  width: 1,
-                  background: line.dash
-                    ? `repeating-linear-gradient(to bottom, ${line.color} 0px, ${line.color} 4px, transparent 4px, transparent 8px)`
-                    : line.color,
-                  pointerEvents: 'none',
-                  zIndex: 2,
-                }}
-              >
-                <span style={{
-                  position: 'absolute',
-                  top: 4,
-                  left: 3,
-                  fontSize: 9,
-                  fontWeight: 600,
-                  color: line.color,
-                  whiteSpace: 'nowrap',
-                  lineHeight: 1,
-                  pointerEvents: 'none',
-                }}>
+              <div key={i} style={{
+                position: 'absolute', top: 0, bottom: 0, left: line.x, width: 1,
+                background: line.dash
+                  ? `repeating-linear-gradient(to bottom,${line.color} 0px,${line.color} 4px,transparent 4px,transparent 8px)`
+                  : line.color,
+                pointerEvents: 'none', zIndex: 2,
+              }}>
+                <span style={{ position: 'absolute', top: 4, left: 3, fontSize: 9, fontWeight: 600, color: line.color, whiteSpace: 'nowrap', lineHeight: 1, pointerEvents: 'none' }}>
                   {line.label}
                 </span>
               </div>
