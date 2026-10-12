@@ -44,6 +44,8 @@ const NAV_LINKS = [
   { to: "/chart", label: "Chart" },
   { to: "/portfolio", label: "Portfolio" },
   { to: "/chat", label: "Chat" },
+  { to: "/donate", label: "Donate" },
+  { to: "/events", label: "Events" },
 ] as const;
 
 function RootDocument({ children }: { children: React.ReactNode }) {
