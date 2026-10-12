@@ -17,7 +17,7 @@ function DonatePage() {
           Fundraising Progress
         </h2>
         <iframe
-          src="https://karusetu.com/donate/99b81656-3dbf-4424-b85b-44e003cb17b5?embed=1&widget=thermometer"
+          src="https://karusetu-staging.vercel.app/donate/ac304bc1-44e7-4fb6-a6c3-211986a76ea6?embed=1&widget=thermometer"
           style={{ width: '100%', maxWidth: '480px', height: '160px', border: 0 }}
           title="Fundraising thermometer"
           loading="lazy"
@@ -30,7 +30,7 @@ function DonatePage() {
           Donation Hub
         </h2>
         <iframe
-          src="https://karusetu.com/donate/99b81656-3dbf-4424-b85b-44e003cb17b5?embed=1&widget=hub"
+          src="https://karusetu-staging.vercel.app/donate/ac304bc1-44e7-4fb6-a6c3-211986a76ea6?embed=1&widget=hub"
           style={{ width: '100%', maxWidth: '480px', height: '420px', border: 0 }}
           title="Donation hub"
           loading="lazy"
@@ -43,7 +43,7 @@ function DonatePage() {
           Quick Donate
         </h2>
         <iframe
-          src="https://karusetu.com/donate/99b81656-3dbf-4424-b85b-44e003cb17b5?embed=1&widget=button"
+          src="https://karusetu-staging.vercel.app/donate/ac304bc1-44e7-4fb6-a6c3-211986a76ea6?embed=1&widget=button"
           style={{ width: '100%', maxWidth: '320px', height: '80px', border: 0 }}
           title="Donate button"
           loading="lazy"
@@ -56,7 +56,7 @@ function DonatePage() {
           Donation Form
         </h2>
         <iframe
-          src="https://karusetu.com/donate/99b81656-3dbf-4424-b85b-44e003cb17b5?embed=1"
+          src="https://karusetu-staging.vercel.app/donate/ac304bc1-44e7-4fb6-a6c3-211986a76ea6?embed=1"
           style={{ width: '100%', maxWidth: '720px', height: '900px', border: 0 }}
           title="Donation form"
           loading="lazy"
